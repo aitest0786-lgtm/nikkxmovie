@@ -591,7 +591,13 @@ app.get('/api/stream-play', (req, res) => {
   }
 
   try {
-    const originalUrl = Buffer.from(maskedId, 'base64').toString('utf8');
+    let originalUrl = Buffer.from(maskedId, 'base64').toString('utf8');
+    
+    // Force HTTPS to prevent mixed-content blocks when site is deployed on HTTPS (like Render)
+    if (originalUrl.startsWith('http://')) {
+      originalUrl = originalUrl.replace('http://', 'https://');
+    }
+
     if (originalUrl.startsWith('http://') || originalUrl.startsWith('https://')) {
       res.redirect(originalUrl);
     } else {
