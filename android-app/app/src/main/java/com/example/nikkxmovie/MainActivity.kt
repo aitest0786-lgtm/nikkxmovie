@@ -92,8 +92,8 @@ class MainActivity : ComponentActivity() {
         mediaPlaybackRequiresUserGesture = false
       }
 
-      // Loads local server (10.0.2.2 connects to your computer's localhost from Emulator)
-      loadUrl("http://10.0.2.2:3000")
+      // Loads public Render server so the app works on real mobile phones anywhere
+      loadUrl("https://nikkxmovie-sxkq.onrender.com")
     }
 
     setContentView(webView)
