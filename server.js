@@ -3,7 +3,10 @@ const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const cors = require('cors');
+const https = require('https');
 const path = require('path');
+
+const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,7 +34,8 @@ async function fetchHtml(url) {
         'Accept-Language': 'en-US,en;q=0.5',
         'Referer': TARGET_BASE_URL + '/'
       },
-      timeout: 15000
+      timeout: 15000,
+      httpsAgent: httpsAgent
     });
     return response.data;
   } catch (error) {
@@ -71,17 +75,32 @@ function cleanMovieTitle(title) {
   return cleaned.replace(/\s+/g, ' ').trim();
 }
 
-// Fetch IMDb ID using free lookup wrapper API
+// Fetch IMDb ID using official IMDb suggestions API (extremely fast and reliable)
 async function getImdbIdByTitle(title) {
   const cleanTitle = cleanMovieTitle(title);
   if (!cleanTitle) return null;
   
   try {
-    const searchUrl = `https://imdb.iamidiotareyoutoo.com/search?q=${encodeURIComponent(cleanTitle)}`;
-    const response = await axios.get(searchUrl, { timeout: 8000 });
-    if (response.data && response.data.description && response.data.description.length > 0) {
-      const firstResult = response.data.description[0];
-      return firstResult['#IMDB_ID'] || null;
+    const firstChar = cleanTitle.charAt(0).toLowerCase();
+    // Validate first character is alphanumeric, fallback to 'a'
+    const queryChar = /^[a-z0-9]$/.test(firstChar) ? firstChar : 'a';
+    
+    const searchUrl = `https://sg.media-imdb.com/suggests/${queryChar}/${encodeURIComponent(cleanTitle.toLowerCase())}.json`;
+    const response = await axios.get(searchUrl, { timeout: 6000 });
+    
+    const dataText = response.data;
+    const jsonStart = dataText.indexOf('(') + 1;
+    const jsonEnd = dataText.lastIndexOf(')');
+    if (jsonStart > 0 && jsonEnd > jsonStart) {
+      const jsonText = dataText.substring(jsonStart, jsonEnd);
+      const json = JSON.parse(jsonText);
+      if (json && json.d && json.d.length > 0) {
+        // Return first match that has an IMDb ID starting with 'tt'
+        const match = json.d.find(item => item.id && item.id.startsWith('tt'));
+        if (match) {
+          return match.id;
+        }
+      }
     }
   } catch (error) {
     console.error(`Failed to lookup IMDb ID for title "${cleanTitle}":`, error.message);
@@ -465,6 +484,7 @@ app.get('/api/movie-details', async (req, res) => {
 
     res.json(result);
   } catch (error) {
+    console.error("Error in /api/movie-details:", error);
     res.status(500).json({ error: 'Failed to parse movie details', details: error.message });
   }
 });
@@ -555,7 +575,8 @@ app.get('/api/download', async (req, res) => {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
           'Referer': `https://${refererHost}/`
-        }
+        },
+        httpsAgent: httpsAgent
       });
 
       if (response.headers['content-type']) {
@@ -583,8 +604,8 @@ app.get('/api/download', async (req, res) => {
   }
 });
 
-// 4. API: Masked native streaming redirect
-app.get('/api/stream-play', (req, res) => {
+// 4. API: Masked native streaming proxy with Range support (bypasses CORS/Referer blocks)
+app.get('/api/stream-play', async (req, res) => {
   const maskedId = req.query.id;
   if (!maskedId) {
     return res.status(400).send('Invalid stream request');
@@ -593,18 +614,69 @@ app.get('/api/stream-play', (req, res) => {
   try {
     let originalUrl = Buffer.from(maskedId, 'base64').toString('utf8');
     
-    // Force HTTPS to prevent mixed-content blocks when site is deployed on HTTPS (like Render)
-    if (originalUrl.startsWith('http://')) {
-      originalUrl = originalUrl.replace('http://', 'https://');
+    // Resolve relative URLs if any
+    if (originalUrl.startsWith('/')) {
+      originalUrl = new URL(originalUrl, TARGET_BASE_URL).href;
     }
 
     if (originalUrl.startsWith('http://') || originalUrl.startsWith('https://')) {
-      res.redirect(originalUrl);
+      let refererHost = 'okjatthd.bond';
+      try {
+        const urlObj = new URL(originalUrl);
+        refererHost = urlObj.searchParams.get('d') || refererHost;
+      } catch (e) {}
+
+      const requestHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Referer': `https://${refererHost}/`
+      };
+
+      // Forward range header if requested by client (critical for seeking and mobile players)
+      if (req.headers.range) {
+        requestHeaders['Range'] = req.headers.range;
+      }
+
+      const response = await axios({
+        method: 'get',
+        url: originalUrl,
+        responseType: 'stream',
+        headers: requestHeaders,
+        timeout: 25000,
+        httpsAgent: httpsAgent
+      });
+
+      // Set headers from the target stream response
+      if (response.headers['content-type']) {
+        res.setHeader('Content-Type', response.headers['content-type']);
+      }
+      if (response.headers['content-range']) {
+        res.setHeader('Content-Range', response.headers['content-range']);
+      }
+      if (response.headers['accept-ranges']) {
+        res.setHeader('Accept-Ranges', response.headers['accept-ranges']);
+      } else {
+        res.setHeader('Accept-Ranges', 'bytes');
+      }
+      if (response.headers['content-length']) {
+        res.setHeader('Content-Length', response.headers['content-length']);
+      }
+
+      res.status(req.headers.range ? 206 : 200);
+      response.data.pipe(res);
     } else {
       res.status(400).send('Malformed stream URL');
     }
   } catch (error) {
-    res.status(500).send('Error decrypting stream URL');
+    console.error('Streaming proxy error, falling back to direct redirect:', error.message);
+    try {
+      let originalUrl = Buffer.from(maskedId, 'base64').toString('utf8');
+      if (originalUrl.startsWith('/')) {
+        originalUrl = new URL(originalUrl, TARGET_BASE_URL).href;
+      }
+      res.redirect(originalUrl);
+    } catch (fallbackErr) {
+      res.status(500).send('Error proxying stream URL');
+    }
   }
 });
 

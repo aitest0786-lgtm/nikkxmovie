@@ -303,12 +303,19 @@ async function openDetailsModal(detailId, posterUrl) {
   modalRealContent.style.display = 'none';
   document.body.style.overflow = 'hidden'; // Lock background scroll
 
+  // Push state to browser history for Android Back Button modal close support
+  history.pushState({ modalOpen: true }, '', '#movie-details');
+
   try {
     const response = await fetch(`/api/movie-details?id=${detailId}`);
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.details || errData.error || `HTTP ${response.status}`);
+    }
     const movie = await response.json();
 
     // Populate Details
-    movieDetailPoster.src = posterUrl || movie.screenshots[0] || '';
+    movieDetailPoster.src = posterUrl || (movie.screenshots && movie.screenshots[0]) || '';
     movieDetailPoster.alt = movie.title;
     movieDetailTitle.textContent = movie.title;
     
@@ -406,12 +413,12 @@ async function openDetailsModal(detailId, posterUrl) {
       btns.forEach(btn => btn.classList.remove('active'));
       
       if (movie.streamUrl) {
-        // Direct stream default
+        // Direct stream default (user preference)
         directServerBtn.classList.add('active');
         iframePlayerWrapper.style.display = 'none';
         videoPlayerIframe.src = '';
         nativePlayerWrapper.style.display = 'block';
-      } else {
+      } else if (movie.imdbId) {
         // Fallback to first available iframe server
         const firstIframeBtn = document.querySelector('.server-btn[data-src-prefix]');
         if (firstIframeBtn) {
@@ -437,7 +444,7 @@ async function openDetailsModal(detailId, posterUrl) {
   } catch (error) {
     console.error('Failed to load movie details:', error);
     closeModal();
-    alert('Failed to load movie details. Please try again.');
+    alert(`Failed to load movie details: ${error.message}`);
   }
 }
 
@@ -457,7 +464,24 @@ function closeModal() {
   const fitBtn = document.querySelector('#player-aspects .aspect-btn[data-aspect="fit"]');
   if (fitBtn) fitBtn.classList.add('active');
   applyPlayerAspectRatio('fit');
+
+  // If closed manually and hash exists, go back in history to clear hash
+  if (window.location.hash === '#movie-details') {
+    history.back();
+  }
 }
+
+// Global popstate event handler for browser / Android Back Button modal close support
+window.addEventListener('popstate', (event) => {
+  if (detailModal.classList.contains('open')) {
+    detailModal.classList.remove('open');
+    document.body.style.overflow = 'auto';
+    videoPlayerIframe.src = '';
+    nativeVideoPlayer.pause();
+    nativeVideoPlayer.src = '';
+    currentImdbId = null;
+  }
+});
 
 function applyPlayerAspectRatio(aspect) {
   const wrappers = [nativePlayerWrapper, iframePlayerWrapper];

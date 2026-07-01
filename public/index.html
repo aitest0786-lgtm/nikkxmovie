@@ -149,7 +149,7 @@
                 
                 <!-- Native Video Player (For direct streaming) -->
                 <div class="player-wrapper-native" id="native-player-wrapper" style="display: none;">
-                  <video id="native-video-player" controls preload="none">
+                  <video id="native-video-player" controls playsinline webkit-playsinline preload="none">
                     <source src="" type="video/mp4">
                     Your browser does not support the video tag.
                   </video>
@@ -157,16 +157,17 @@
 
                 <!-- Iframe Player (For fallback servers) -->
                 <div class="player-wrapper-iframe" id="iframe-player-wrapper" style="display: none;">
-                  <iframe id="video-player-iframe" src="" frameborder="0" referrerpolicy="origin" allowfullscreen></iframe>
+                  <iframe id="video-player-iframe" src="" frameborder="0" referrerpolicy="origin" allow="autoplay; encrypted-media" allowfullscreen></iframe>
                 </div>
 
                 <!-- Server Selector -->
                  <div class="server-selector" id="player-servers">
                    <span class="server-selector-label"><i class="fa-solid fa-server"></i> Choose Server:</span>
                    <button class="server-btn" id="server-btn-direct" style="display: none;">Direct Stream (Premium)</button>
-                   <button class="server-btn" data-src-prefix="https://vidsrc.xyz/embed/movie/">Server 1 (Vidsrc.xyz)</button>
-                   <button class="server-btn" data-src-prefix="https://vidsrc.me/embed/movie/">Server 2 (Vidsrc.me)</button>
-                   <button class="server-btn" data-src-prefix="https://embed.su/embed/movie/">Server 3 (Embed.su)</button>
+                   <button class="server-btn" data-src-prefix="https://vidsrc.to/embed/movie/">Server 1 (Vidsrc.to)</button>
+                   <button class="server-btn" data-src-prefix="https://vidsrc.cc/v2/embed/movie/">Server 2 (Vidsrc.cc)</button>
+                   <button class="server-btn" data-src-prefix="https://player.autoembed.cc/embed/movie/">Server 3 (Autoembed)</button>
+                   <button class="server-btn" data-src-prefix="https://multiembed.mov/?video_id=">Server 4 (Multiembed)</button>
                  </div>
 
                  <!-- Aspect Ratio Selector -->
