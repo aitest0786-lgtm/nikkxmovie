@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -11,7 +12,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-const TARGET_BASE_URL = 'https://okjatt.bond';
+const TARGET_BASE_URL = process.env.TARGET_BASE_URL || 'https://okjatt.bond';
 
 // Simple in-memory cache to make page loading super fast and avoid rate limiting
 const cache = {
