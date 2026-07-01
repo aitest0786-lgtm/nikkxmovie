@@ -9,6 +9,10 @@ const path = require('path');
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 const app = express();
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
@@ -611,6 +615,13 @@ app.get('/api/stream-play', async (req, res) => {
     return res.status(400).send('Invalid stream request');
   }
 
+  const controller = new AbortController();
+  
+  // Clean up and abort axios request if the client disconnects
+  req.on('close', () => {
+    controller.abort();
+  });
+
   try {
     let originalUrl = Buffer.from(maskedId, 'base64').toString('utf8');
     
@@ -636,14 +647,56 @@ app.get('/api/stream-play', async (req, res) => {
         requestHeaders['Range'] = req.headers.range;
       }
 
-      const response = await axios({
-        method: 'get',
-        url: originalUrl,
-        responseType: 'stream',
-        headers: requestHeaders,
-        timeout: 25000,
-        httpsAgent: httpsAgent
-      });
+      let currentUrl = originalUrl;
+      let redirectCount = 0;
+      let response = null;
+
+      // Handle redirects manually to preserve the Referer header
+      while (redirectCount < 5) {
+        try {
+          response = await axios({
+            method: 'get',
+            url: currentUrl,
+            responseType: 'stream',
+            headers: requestHeaders,
+            timeout: 25000,
+            httpsAgent: httpsAgent,
+            maxRedirects: 0,
+            validateStatus: status => (status >= 200 && status < 300) || status === 301 || status === 302 || status === 307 || status === 308,
+            signal: controller.signal
+          });
+
+          // Check for redirect status codes
+          if ([301, 302, 307, 308].includes(response.status)) {
+            let redirectUrl = response.headers.location;
+            if (!redirectUrl) {
+              throw new Error('Redirect status received without Location header');
+            }
+            if (!redirectUrl.startsWith('http')) {
+              redirectUrl = new URL(redirectUrl, currentUrl).href;
+            }
+            
+            currentUrl = redirectUrl;
+            redirectCount++;
+
+            // Update referer host for the new redirect URL
+            try {
+              const urlObj = new URL(currentUrl);
+              requestHeaders['Referer'] = `https://${urlObj.hostname}/`;
+            } catch (e) {}
+
+            continue;
+          }
+
+          break; // Got a valid non-redirect response
+        } catch (err) {
+          throw err;
+        }
+      }
+
+      if (!response) {
+        throw new Error('No response received from target stream server');
+      }
 
       // Set headers from the target stream response
       if (response.headers['content-type']) {
@@ -667,6 +720,11 @@ app.get('/api/stream-play', async (req, res) => {
       res.status(400).send('Malformed stream URL');
     }
   } catch (error) {
+    controller.abort();
+    if (error.name === 'CanceledError' || error.name === 'AbortError') {
+      // Request aborted by client, no need to log or redirect
+      return;
+    }
     console.error('Streaming proxy error, falling back to direct redirect:', error.message);
     try {
       let originalUrl = Buffer.from(maskedId, 'base64').toString('utf8');
@@ -675,7 +733,9 @@ app.get('/api/stream-play', async (req, res) => {
       }
       res.redirect(originalUrl);
     } catch (fallbackErr) {
-      res.status(500).send('Error proxying stream URL');
+      if (!res.headersSent) {
+        res.status(500).send('Error proxying stream URL');
+      }
     }
   }
 });

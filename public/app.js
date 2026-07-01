@@ -178,6 +178,22 @@ function setupEventListeners() {
       applyPlayerAspectRatio(aspect);
     });
   });
+
+  // Native Video Player error handler to assist debugging
+  nativeVideoPlayer.addEventListener('error', () => {
+    const err = nativeVideoPlayer.error;
+    let message = 'Unknown playback error.';
+    if (err) {
+      switch (err.code) {
+        case 1: message = 'Playback aborted by user/client request.'; break;
+        case 2: message = 'Network error while loading video stream.'; break;
+        case 3: message = 'Video decoding failed. The format or codec (like AC3/DTS audio) is not supported by your browser.'; break;
+        case 4: message = 'Video stream source format not supported.'; break;
+      }
+      console.error(`Native video error [Code ${err.code}]: ${message}`, err);
+      alert(`Playback Error: ${message}`);
+    }
+  });
 }
 
 function scrollToMoviesSection() {
