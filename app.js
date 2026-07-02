@@ -627,6 +627,7 @@ async function openDetailsModal(detailId, posterUrl) {
       if (resolvedStreamUrl && !resolvedStreamUrl.includes('/api/netmirror-stream')) {
         nativeVideoPlayer.src = resolvedStreamUrl;
         nativeVideoPlayer.load();
+        nativeVideoPlayer.play().catch(e => console.log('Autoplay blocked:', e));
       }
     } else {
       currentDirectStreamUrl = null;
@@ -689,6 +690,7 @@ async function openDetailsModal(detailId, posterUrl) {
           if (currentDirectStreamUrl) {
             nativeVideoPlayer.src = currentDirectStreamUrl;
             nativeVideoPlayer.load();
+            nativeVideoPlayer.play().catch(e => console.log('Autoplay blocked:', e));
           }
           startDirectStreamWatchdog();
         }
@@ -1252,7 +1254,21 @@ function clearDirectStreamWatchdog() {
 }
 
 function startDirectStreamWatchdog() {
-  // No-op: disabled auto-switching to prevent disruptive swaps during slow buffering or autoplay blocks
+  clearDirectStreamWatchdog();
+  directStreamWatchdog = setTimeout(() => {
+    const activeBtn = document.querySelector('#player-servers .server-btn.active');
+    if (activeBtn && activeBtn.id === 'server-btn-direct' && nativeVideoPlayer.paused) {
+      console.log('[Watchdog] Direct stream buffering timeout (180s) reached. Swapping to Server 1...');
+      const serverBtn = document.querySelector('#player-servers .server-btn[data-src-prefix]');
+      if (serverBtn) {
+        nativeVideoPlayer.pause();
+        nativeVideoPlayer.removeAttribute('src');
+        nativeVideoPlayer.load();
+        serverBtn.click();
+        showPlayerToast('Direct stream buffered slowly (exceeded 180s). Swapped to Server 1...');
+      }
+    }
+  }, 180000); // 180 seconds buffering switch time
 }
 
 // Hook up native video playback watchdog clear states
