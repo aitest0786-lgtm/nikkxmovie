@@ -1269,21 +1269,7 @@ function clearDirectStreamWatchdog() {
 }
 
 function startDirectStreamWatchdog() {
-  clearDirectStreamWatchdog();
-  directStreamWatchdog = setTimeout(() => {
-    const activeBtn = document.querySelector('#player-servers .server-btn.active');
-    if (activeBtn && activeBtn.id === 'server-btn-direct' && nativeVideoPlayer.paused) {
-      console.log('[Watchdog] Direct stream loading timed out. Swapping to Server 1...');
-      const serverBtn = document.querySelector('#player-servers .server-btn[data-src-prefix]');
-      if (serverBtn) {
-        nativeVideoPlayer.pause();
-        nativeVideoPlayer.removeAttribute('src');
-        nativeVideoPlayer.load();
-        serverBtn.click();
-        showPlayerToast('Direct stream buffered slowly. Swapped to Server 1...');
-      }
-    }
-  }, 6000);
+  // No-op: disabled auto-switching to prevent disruptive swaps during slow buffering or autoplay blocks
 }
 
 // Hook up native video playback watchdog clear states
