@@ -283,8 +283,9 @@ function setupEventListeners() {
       return;
     }
 
-    // Only handle error if the modal is actually open and video has a source
-    if (!detailModal.classList.contains('open') || !nativeVideoPlayer.src) {
+    // Only handle error if the modal is actually open and video has a valid direct source attribute
+    const rawSrc = nativeVideoPlayer.getAttribute('src');
+    if (!detailModal.classList.contains('open') || !rawSrc || rawSrc === '' || nativeVideoPlayer.src === window.location.href) {
       return;
     }
 
@@ -585,12 +586,12 @@ async function openDetailsModal(detailId, posterUrl) {
     let streamOnline = movie.streamUrl ? true : false;
 
     // Configure Player (Direct Stream)
-    if (movie.streamUrl && streamOnline) {
-      const resolvedStreamUrl = movie.streamUrl.startsWith('/api/') ? API_BASE_URL + movie.streamUrl : movie.streamUrl;
+    if ((movie.streamUrl && streamOnline) || hasEpisodes) {
+      const resolvedStreamUrl = movie.streamUrl ? (movie.streamUrl.startsWith('/api/') ? API_BASE_URL + movie.streamUrl : movie.streamUrl) : '';
       currentDirectStreamUrl = resolvedStreamUrl;
       directServerBtn.style.display = 'inline-block';
       hasPlayer = true;
-      if (!resolvedStreamUrl.includes('/api/netmirror-stream')) {
+      if (resolvedStreamUrl && !resolvedStreamUrl.includes('/api/netmirror-stream')) {
         nativeVideoPlayer.src = resolvedStreamUrl;
         nativeVideoPlayer.load();
       }

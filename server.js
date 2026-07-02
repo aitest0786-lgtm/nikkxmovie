@@ -765,15 +765,24 @@ app.get('/api/movie-details', async (req, res) => {
         }
 
         let streamUrl = null;
-        if (downloads.length > 0) {
-          const firstDwd = downloads[0].url; // e.g. /api/download?id=...
-          try {
-            const base64Id = firstDwd.split('?id=')[1];
-            const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
-            if (rawUrl && !rawUrl.includes('.html')) {
-              streamUrl = `/api/stream-play?id=${Buffer.from(rawUrl).toString('base64')}`;
+        if (downloads && downloads.length > 0) {
+          const validDwd = downloads.find(d => {
+            try {
+              const base64Id = d.url.split('?id=')[1];
+              const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
+              return rawUrl && !rawUrl.includes('.html');
+            } catch(e) {
+              return false;
             }
-          } catch (e) {}
+          });
+          
+          if (validDwd) {
+            try {
+              const base64Id = validDwd.url.split('?id=')[1];
+              const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
+              streamUrl = `/api/stream-play?id=${Buffer.from(rawUrl).toString('base64')}`;
+            } catch(e) {}
+          }
         }
 
         const result = {
@@ -1010,15 +1019,24 @@ app.get('/api/movie-details', async (req, res) => {
     let maskedStreamUrl = streamUrl ? `/api/stream-play?id=${Buffer.from(streamUrl).toString('base64')}` : null;
     
     // Fallback: if direct streamUrl is not found, extract from first available download link
-    if (!maskedStreamUrl && downloads.length > 0) {
-      try {
-        const firstDwd = downloads[0].url; // /api/download?id=...
-        const base64Id = firstDwd.split('?id=')[1];
-        const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
-        if (rawUrl && !rawUrl.includes('.html')) {
-          maskedStreamUrl = `/api/stream-play?id=${Buffer.from(rawUrl).toString('base64')}`;
+    if (!maskedStreamUrl && downloads && downloads.length > 0) {
+      const validDwd = downloads.find(d => {
+        try {
+          const base64Id = d.url.split('?id=')[1];
+          const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
+          return rawUrl && !rawUrl.includes('.html');
+        } catch(e) {
+          return false;
         }
-      } catch (e) {}
+      });
+      
+      if (validDwd) {
+        try {
+          const base64Id = validDwd.url.split('?id=')[1];
+          const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
+          maskedStreamUrl = `/api/stream-play?id=${Buffer.from(rawUrl).toString('base64')}`;
+        } catch(e) {}
+      }
     }
 
     const result = {
