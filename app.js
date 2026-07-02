@@ -299,25 +299,7 @@ function setupEventListeners() {
         case 4: message = 'Video stream source format not supported.'; break;
       }
       console.error(`Native video error [Code ${err.code}]: ${message}`, err);
-
-      // Automatic fallback to Server 1 (vidsrc.to) if IMDb ID is available
-      if (currentImdbId) {
-        console.log('Direct stream failed. Switching to Server 1 (vidsrc.to) fallback...');
-        const serverBtn = document.querySelector('#player-servers .server-btn[data-src-prefix]');
-        if (serverBtn) {
-          // Pause and clear native player immediately to prevent duplicate events
-          nativeVideoPlayer.pause();
-          nativeVideoPlayer.removeAttribute('src');
-          nativeVideoPlayer.load();
-          // Switch to Server 1
-          serverBtn.click();
-          showPlayerToast('Direct stream format not supported. Switching to Server 1...');
-        } else {
-          showPlayerToast(`Direct stream failed: ${message}`);
-        }
-      } else {
-        showPlayerToast(`Direct stream failed: ${message}`);
-      }
+      showPlayerToast(`Direct stream failed: ${message}`);
     }
   });
 }
@@ -581,27 +563,6 @@ async function openDetailsModal(detailId, posterUrl) {
       `;
     }
 
-    // Set up Video Player
-    let hasPlayer = false;
-    let streamOnline = movie.streamUrl ? true : false;
-
-    // Configure Player (Direct Stream)
-    if ((movie.streamUrl && streamOnline) || hasEpisodes) {
-      const resolvedStreamUrl = movie.streamUrl ? (movie.streamUrl.startsWith('/api/') ? API_BASE_URL + movie.streamUrl : movie.streamUrl) : '';
-      currentDirectStreamUrl = resolvedStreamUrl;
-      directServerBtn.style.display = 'inline-block';
-      hasPlayer = true;
-      if (resolvedStreamUrl && !resolvedStreamUrl.includes('/api/netmirror-stream')) {
-        nativeVideoPlayer.src = resolvedStreamUrl;
-        nativeVideoPlayer.load();
-      }
-    } else {
-      currentDirectStreamUrl = null;
-      nativeVideoPlayer.removeAttribute('src');
-      nativeVideoPlayer.load();
-      directServerBtn.style.display = 'none';
-    }
-
     let hasEpisodes = movie.downloads && movie.downloads.some(d => d.isEpisode);
     
     if (!hasEpisodes && isShow && movie.downloads && movie.downloads.length > 0) {
@@ -651,6 +612,27 @@ async function openDetailsModal(detailId, posterUrl) {
       updateEpisodeNavButtons();
     } else {
       epNavBar.style.display = 'none';
+    }
+
+    // Set up Video Player
+    let hasPlayer = false;
+    let streamOnline = movie.streamUrl ? true : false;
+
+    // Configure Player (Direct Stream)
+    if ((movie.streamUrl && streamOnline) || hasEpisodes) {
+      const resolvedStreamUrl = movie.streamUrl ? (movie.streamUrl.startsWith('/api/') ? API_BASE_URL + movie.streamUrl : movie.streamUrl) : '';
+      currentDirectStreamUrl = resolvedStreamUrl;
+      directServerBtn.style.display = 'inline-block';
+      hasPlayer = true;
+      if (resolvedStreamUrl && !resolvedStreamUrl.includes('/api/netmirror-stream')) {
+        nativeVideoPlayer.src = resolvedStreamUrl;
+        nativeVideoPlayer.load();
+      }
+    } else {
+      currentDirectStreamUrl = null;
+      nativeVideoPlayer.removeAttribute('src');
+      nativeVideoPlayer.load();
+      directServerBtn.style.display = 'none';
     }
 
     if (movie.imdbId || hasEpisodes) {
