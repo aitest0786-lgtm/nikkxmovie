@@ -619,10 +619,10 @@ async function openDetailsModal(detailId, posterUrl) {
     let streamOnline = movie.streamUrl ? true : false;
 
     // Configure Player (Direct Stream)
+    directServerBtn.style.display = 'inline-block';
     if ((movie.streamUrl && streamOnline) || hasEpisodes) {
       const resolvedStreamUrl = movie.streamUrl ? (movie.streamUrl.startsWith('/api/') ? API_BASE_URL + movie.streamUrl : movie.streamUrl) : '';
       currentDirectStreamUrl = resolvedStreamUrl;
-      directServerBtn.style.display = 'inline-block';
       hasPlayer = true;
       if (resolvedStreamUrl && !resolvedStreamUrl.includes('/api/netmirror-stream')) {
         nativeVideoPlayer.src = resolvedStreamUrl;
@@ -633,7 +633,6 @@ async function openDetailsModal(detailId, posterUrl) {
       currentDirectStreamUrl = null;
       nativeVideoPlayer.removeAttribute('src');
       nativeVideoPlayer.load();
-      directServerBtn.style.display = 'none';
     }
 
     if (movie.imdbId || hasEpisodes) {
