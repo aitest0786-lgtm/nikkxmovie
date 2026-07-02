@@ -18,6 +18,17 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+
+// Prevent index.html cache so versioned client scripts are loaded fresh
+app.get('/', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  next();
+});
+app.get('/index.html', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // const TARGET_BASE_URL = process.env.TARGET_BASE_URL || 'https://okjatt.bond';
@@ -1368,8 +1379,9 @@ app.get('/api/netmirror-stream', async (req, res) => {
   }
 });
 
-// Catch-all route to serve the SPA frontend
+// Catch-all route to serve the SPA frontend with caching disabled
 app.get('*', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
