@@ -160,14 +160,30 @@ function setupEventListeners() {
       btn.classList.add('active');
 
       if (btn.id === 'server-btn-direct') {
-        iframePlayerWrapper.style.display = 'none';
-        videoPlayerIframe.src = '';
-        nativePlayerWrapper.style.display = 'block';
-        if (currentDirectStreamUrl) {
-          nativeVideoPlayer.src = currentDirectStreamUrl;
+        if (currentDirectStreamUrl && currentDirectStreamUrl.includes('/api/netmirror-stream')) {
+          nativePlayerWrapper.style.display = 'none';
+          nativeVideoPlayer.removeAttribute('src');
           nativeVideoPlayer.load();
-          nativeVideoPlayer.play().catch(e => console.log('Autoplay blocked:', e));
-          startDirectStreamWatchdog();
+          iframePlayerWrapper.style.display = 'block';
+          
+          fetch(currentDirectStreamUrl)
+            .then(res => res.json())
+            .then(data => {
+              if (data.iframeUrl) {
+                videoPlayerIframe.src = data.iframeUrl.startsWith('/api/') ? API_BASE_URL + data.iframeUrl : data.iframeUrl;
+              }
+            })
+            .catch(err => console.error('Failed to load NetMirror movie stream:', err));
+        } else {
+          iframePlayerWrapper.style.display = 'none';
+          videoPlayerIframe.src = '';
+          nativePlayerWrapper.style.display = 'block';
+          if (currentDirectStreamUrl) {
+            nativeVideoPlayer.src = currentDirectStreamUrl;
+            nativeVideoPlayer.load();
+            nativeVideoPlayer.play().catch(e => console.log('Autoplay blocked:', e));
+            startDirectStreamWatchdog();
+          }
         }
       } else {
         clearDirectStreamWatchdog();
@@ -568,14 +584,16 @@ async function openDetailsModal(detailId, posterUrl) {
     let hasPlayer = false;
     let streamOnline = movie.streamUrl ? true : false;
 
-    // Configure Native Player (Direct Stream)
+    // Configure Player (Direct Stream)
     if (movie.streamUrl && streamOnline) {
       const resolvedStreamUrl = movie.streamUrl.startsWith('/api/') ? API_BASE_URL + movie.streamUrl : movie.streamUrl;
       currentDirectStreamUrl = resolvedStreamUrl;
-      nativeVideoPlayer.src = resolvedStreamUrl;
-      nativeVideoPlayer.load();
       directServerBtn.style.display = 'inline-block';
       hasPlayer = true;
+      if (!resolvedStreamUrl.includes('/api/netmirror-stream')) {
+        nativeVideoPlayer.src = resolvedStreamUrl;
+        nativeVideoPlayer.load();
+      }
     } else {
       currentDirectStreamUrl = null;
       nativeVideoPlayer.removeAttribute('src');
@@ -667,10 +685,30 @@ async function openDetailsModal(detailId, posterUrl) {
       if (movie.streamUrl && streamOnline) {
         // Direct stream default (user preference)
         directServerBtn.classList.add('active');
-        iframePlayerWrapper.style.display = 'none';
-        videoPlayerIframe.src = '';
-        nativePlayerWrapper.style.display = 'block';
-        startDirectStreamWatchdog();
+        if (movie.streamUrl.includes('/api/netmirror-stream')) {
+          nativePlayerWrapper.style.display = 'none';
+          nativeVideoPlayer.removeAttribute('src');
+          nativeVideoPlayer.load();
+          iframePlayerWrapper.style.display = 'block';
+          const resolvedStreamUrl = movie.streamUrl.startsWith('/api/') ? API_BASE_URL + movie.streamUrl : movie.streamUrl;
+          fetch(resolvedStreamUrl)
+            .then(res => res.json())
+            .then(data => {
+              if (data.iframeUrl) {
+                videoPlayerIframe.src = data.iframeUrl.startsWith('/api/') ? API_BASE_URL + data.iframeUrl : data.iframeUrl;
+              }
+            })
+            .catch(err => console.error('Failed to load NetMirror movie stream:', err));
+        } else {
+          iframePlayerWrapper.style.display = 'none';
+          videoPlayerIframe.src = '';
+          nativePlayerWrapper.style.display = 'block';
+          if (currentDirectStreamUrl) {
+            nativeVideoPlayer.src = currentDirectStreamUrl;
+            nativeVideoPlayer.load();
+          }
+          startDirectStreamWatchdog();
+        }
       } else if (currentImdbId) {
         // Fallback to first available iframe server
         const firstIframeBtn = document.querySelector('.server-btn[data-src-prefix]');

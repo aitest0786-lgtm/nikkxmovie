@@ -763,6 +763,18 @@ app.get('/api/movie-details', async (req, res) => {
           console.error('Error fetching IMDb ID for VegaMovie:', err.message);
         }
 
+        let streamUrl = null;
+        if (downloads.length > 0) {
+          const firstDwd = downloads[0].url; // e.g. /api/download?id=...
+          try {
+            const base64Id = firstDwd.split('?id=')[1];
+            const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
+            if (rawUrl && !rawUrl.includes('.html')) {
+              streamUrl = `/api/stream-play?id=${Buffer.from(rawUrl).toString('base64')}`;
+            }
+          } catch (e) {}
+        }
+
         const result = {
           title: cleanTitleBranding(title),
           infoHtml: cleanTitleBranding(infoHtml),
@@ -774,7 +786,7 @@ app.get('/api/movie-details', async (req, res) => {
             isEpisode: d.isEpisode
           })),
           imdbId,
-          streamUrl: null
+          streamUrl: streamUrl
         };
 
         cache.details[detailUrl] = {
@@ -994,7 +1006,19 @@ app.get('/api/movie-details', async (req, res) => {
     }
 
     // Mask direct streamUrl
-    const maskedStreamUrl = streamUrl ? `/api/stream-play?id=${Buffer.from(streamUrl).toString('base64')}` : null;
+    let maskedStreamUrl = streamUrl ? `/api/stream-play?id=${Buffer.from(streamUrl).toString('base64')}` : null;
+    
+    // Fallback: if direct streamUrl is not found, extract from first available download link
+    if (!maskedStreamUrl && downloads.length > 0) {
+      try {
+        const firstDwd = downloads[0].url; // /api/download?id=...
+        const base64Id = firstDwd.split('?id=')[1];
+        const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
+        if (rawUrl && !rawUrl.includes('.html')) {
+          maskedStreamUrl = `/api/stream-play?id=${Buffer.from(rawUrl).toString('base64')}`;
+        }
+      } catch (e) {}
+    }
 
     const result = {
       title: cleanTitleBranding(title),
