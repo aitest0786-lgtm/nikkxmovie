@@ -591,7 +591,8 @@ app.get('/api/movie-details', async (req, res) => {
       
       // Downloads/Streaming list builder
       const downloads = [];
-      if (item.season && item.season.length > 0) {
+      const isActualShow = item.season && item.season.length > 0 && !(item.season.length === 1 && item.season[0].se === 0 && item.season[0].ep === 0);
+      if (isActualShow) {
         // TV Show/Web Series
         item.season.forEach(s => {
           const seasonNum = s.se;
