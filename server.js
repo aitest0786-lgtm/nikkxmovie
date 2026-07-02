@@ -115,25 +115,25 @@ function cleanMovieTitle(title) {
   return cleaned.replace(/\s+/g, ' ').trim();
 }
 
-// Helper to replace target site brandings with nikkXmovie
+// Helper to replace target site brandings with NIKK ❤️ POOJA
 function cleanTitleBranding(title) {
   if (!title) return '';
   return title
-    .replace(/okjatt\.bond\.com/gi, 'nikkXmovie')
-    .replace(/okjatt\.bond/gi, 'nikkXmovie')
-    .replace(/okjatthd\.bond/gi, 'nikkXmovie')
-    .replace(/okjatt\.in/gi, 'nikkXmovie')
-    .replace(/okjatt\.org/gi, 'nikkXmovie')
-    .replace(/okjatt/gi, 'nikkXmovie')
-    .replace(/vegamovie\.ss/gi, 'nikkXmovie')
-    .replace(/vegamovies/gi, 'nikkXmovie')
-    .replace(/vegamovie/gi, 'nikkXmovie')
-    .replace(/netmirror\.global/gi, 'nikkXmovie')
-    .replace(/netmirror/gi, 'nikkXmovie')
-    .replace(/\[OkJatt\]/gi, '[nikkXmovie]')
-    .replace(/\(OkJatt\)/gi, '(nikkXmovie)')
-    .replace(/\[NetMirror\]/gi, '[nikkXmovie]')
-    .replace(/\(NetMirror\)/gi, '(nikkXmovie)')
+    .replace(/okjatt\.bond\.com/gi, 'NIKK ❤️ POOJA')
+    .replace(/okjatt\.bond/gi, 'NIKK ❤️ POOJA')
+    .replace(/okjatthd\.bond/gi, 'NIKK ❤️ POOJA')
+    .replace(/okjatt\.in/gi, 'NIKK ❤️ POOJA')
+    .replace(/okjatt\.org/gi, 'NIKK ❤️ POOJA')
+    .replace(/okjatt/gi, 'NIKK ❤️ POOJA')
+    .replace(/vegamovie\.ss/gi, 'NIKK ❤️ POOJA')
+    .replace(/vegamovies/gi, 'NIKK ❤️ POOJA')
+    .replace(/vegamovie/gi, 'NIKK ❤️ POOJA')
+    .replace(/netmirror\.global/gi, 'NIKK ❤️ POOJA')
+    .replace(/netmirror/gi, 'NIKK ❤️ POOJA')
+    .replace(/\[OkJatt\]/gi, '[NIKK ❤️ POOJA]')
+    .replace(/\(OkJatt\)/gi, '(NIKK ❤️ POOJA)')
+    .replace(/\[NetMirror\]/gi, '[NIKK ❤️ POOJA]')
+    .replace(/\(NetMirror\)/gi, '(NIKK ❤️ POOJA)')
     .replace(/\s+/g, ' ')
     .trim();
 }
