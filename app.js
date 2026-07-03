@@ -462,6 +462,20 @@ function setupEventListeners() {
       }
     }
   });
+
+  // Floating player audio trigger toggle
+  const floatingAudioTrigger = document.getElementById('player-floating-audio-trigger');
+  const floatingAudioMenu = document.getElementById('player-floating-audio-menu');
+  if (floatingAudioTrigger && floatingAudioMenu) {
+    floatingAudioTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      floatingAudioMenu.classList.toggle('open');
+    });
+    
+    document.addEventListener('click', () => {
+      floatingAudioMenu.classList.remove('open');
+    });
+  }
 }
 
 function scrollToMoviesSection() {
@@ -1181,8 +1195,19 @@ function updateQualityAndAudioSelectorsForPlaying(currentTitle) {
     }
   });
 
+  const floatingAudioContainer = document.getElementById('player-floating-audio-container');
+  const floatingAudioMenu = document.getElementById('player-floating-audio-menu');
+  if (floatingAudioContainer && floatingAudioMenu) {
+    floatingAudioContainer.style.display = 'none';
+    floatingAudioMenu.innerHTML = '';
+  }
+
   if (audios.length > 1) {
     audioContainer.style.display = 'block';
+    if (floatingAudioContainer && floatingAudioMenu) {
+      floatingAudioContainer.style.display = 'block';
+    }
+    
     audios.forEach(a => {
       const btn = document.createElement('button');
       btn.className = 'audio-btn';
@@ -1200,6 +1225,29 @@ function updateQualityAndAudioSelectorsForPlaying(currentTitle) {
         playEpisode(streamPlayUrl, a.title);
       });
       audioOptions.appendChild(btn);
+
+      // Populate floating player dropdown menu
+      if (floatingAudioMenu) {
+        const item = document.createElement('div');
+        item.className = 'player-floating-audio-item';
+        if (a.title === currentTitle) {
+          item.classList.add('active');
+        }
+        item.innerHTML = `<span>${a.label}</span> <i class="fa-solid fa-check check-icon"></i>`;
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          floatingAudioMenu.querySelectorAll('.player-floating-audio-item').forEach(el => el.classList.remove('active'));
+          item.classList.add('active');
+          floatingAudioMenu.classList.remove('open');
+          
+          let streamPlayUrl = a.url;
+          if (a.url.includes('/api/download')) {
+            streamPlayUrl = a.url.replace('/api/download', '/api/stream-play');
+          }
+          playEpisode(streamPlayUrl, a.title);
+        });
+        floatingAudioMenu.appendChild(item);
+      }
     });
   } else {
     // If it's a single file dual audio, show helpful information

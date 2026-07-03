@@ -170,6 +170,14 @@
                     <source src="" type="video/mp4">
                     Your browser does not support the video tag.
                   </video>
+
+                  <!-- Floating Audio Selector inside Player -->
+                  <div class="player-floating-audio" id="player-floating-audio-container" style="display: none;">
+                    <button class="player-floating-audio-btn" id="player-floating-audio-trigger" title="Change Audio Language">
+                      <i class="fa-solid fa-headphones"></i> <span>Audio</span>
+                    </button>
+                    <div class="player-floating-audio-dropdown" id="player-floating-audio-menu"></div>
+                  </div>
                   <div class="player-loader-overlay" id="native-player-loader" style="display: none;">
                     <div class="player-loader-content">
                       <div class="player-loader-spinner"></div>
@@ -274,6 +282,6 @@
     </div>
   </footer>
 
-  <script src="app.js?v=4.5"></script>
+  <script src="app.js?v=4.6"></script>
 </body>
 </html>

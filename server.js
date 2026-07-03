@@ -1792,15 +1792,49 @@ app.get('/api/netmirror-stream', async (req, res) => {
     let playUrl = `https://speed.watch22.shop/play/watchbox.php?id=${resolvedSubjectId}&se=${se || 0}&ep=${ep || 0}&dp=${encodeURIComponent(resolvedDp)}&na=${na}`;
     playUrl += `&ts=${timestamp}&sig=${signature}&exten=false`;
     
-    // Initialize session by hitting NetMirror API
+    // Attempt to scrape direct mp4 video stream URLs from the player page
     try {
+      // NetMirror API hit is required first to initialize session
       const apiDetailUrl = `https://api2.imdb3.shop/api/${mediaType}/${resolvedSubjectId}`;
       await axiosGetWithRetry(apiDetailUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0' },
         timeout: 4000
       }).catch(() => {});
-    } catch (apiErr) {
-      console.error('[Session] NetMirror session init failed:', apiErr.message);
+
+      const response = await axiosGetWithRetry(playUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Referer': 'https://netmirror.global/'
+        },
+        timeout: 8000
+      });
+      
+      const html = response.data;
+      console.log(`[Scraper] Fetched watchbox HTML length: ${html.length}. Content snippet: ${html.substring(0, 100).trim().replace(/\s+/g, ' ')}`);
+      
+      const mp4Links = [];
+      const regex = /myFunction(?:_dl)?\('([^']+)'/gi;
+      let match;
+      while ((match = regex.exec(html)) !== null) {
+        const link = match[1];
+        if (link && link.startsWith('http') && !mp4Links.includes(link)) {
+          mp4Links.push(link);
+        }
+      }
+      
+      console.log(`[Scraper] Parsed direct MP4 links count: ${mp4Links.length}`);
+      if (mp4Links.length > 0) {
+        // Choose the highest quality stream and ensure it uses the whitelisted bcdn.watch22.shop streaming domain
+        const targetMp4 = mp4Links[0].replace('bcdnxw.hakunaymatata.com', 'bcdn.watch22.shop');
+        
+        // Append refresh metadata parameter to allow auto-resigning when range requests hit 403 (signature expiry)
+        const refreshParams = `subjectid=${subjectid}&se=${se || 0}&ep=${ep || 0}&dp=${encodeURIComponent(dp || '')}&title=${encodeURIComponent(title || '')}`;
+        const maskedStreamUrl = `/api/stream-play?id=${Buffer.from(targetMp4).toString('base64')}&refresh=${Buffer.from(refreshParams).toString('base64')}`;
+        
+        return res.json({ streamUrl: maskedStreamUrl });
+      }
+    } catch (scrapeErr) {
+      console.error("Failed to parse direct MP4 links from NetMirror player, falling back to iframe:", scrapeErr.message);
     }
     
     return res.json({ iframeUrl: playUrl });
