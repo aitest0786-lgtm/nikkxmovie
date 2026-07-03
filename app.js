@@ -238,8 +238,11 @@ function setupEventListeners() {
       btn.classList.add('active');
 
       if (btn.id === 'server-btn-direct') {
-        if (currentDirectStreamUrl && currentDirectStreamUrl.includes('/api/netmirror-stream')) {
-          fetch(currentDirectStreamUrl)
+        // Direct Stream (Premium) now plays NetMirror!
+        if (currentImdbId) {
+          showPlayerToast('Loading Direct Stream (Premium)...');
+          const fetchUrl = `${API_BASE_URL}/api/netmirror-stream?subjectid=${currentImdbId}&se=${currentMediaType === 'tv' ? currentSeason : 0}&ep=${currentMediaType === 'tv' ? currentEpisode : 0}&title=${encodeURIComponent(currentMovieData ? currentMovieData.title : '')}`;
+          fetch(fetchUrl)
             .then(res => res.json())
             .then(data => {
               if (data.streamUrl) {
@@ -258,8 +261,21 @@ function setupEventListeners() {
                 videoPlayerIframe.src = data.iframeUrl.startsWith('/api/') ? API_BASE_URL + data.iframeUrl : data.iframeUrl;
               }
             })
-            .catch(err => console.error('Failed to load NetMirror movie stream:', err));
+            .catch(err => {
+              console.error('Direct Stream (Premium) NetMirror load failed, falling back to original source:', err);
+              // Fallback to original movie stream Url
+              if (currentDirectStreamUrl) {
+                iframePlayerWrapper.style.display = 'none';
+                videoPlayerIframe.src = '';
+                nativePlayerWrapper.style.display = 'block';
+                nativeVideoPlayer.src = currentDirectStreamUrl;
+                nativeVideoPlayer.load();
+                nativeVideoPlayer.play().catch(e => console.log('Autoplay blocked:', e));
+                startDirectStreamWatchdog();
+              }
+            });
         } else {
+          // If no IMDb ID, fallback to original source
           iframePlayerWrapper.style.display = 'none';
           videoPlayerIframe.src = '';
           nativePlayerWrapper.style.display = 'block';
@@ -274,47 +290,43 @@ function setupEventListeners() {
         clearDirectStreamWatchdog();
         
         if (btn.id === 'server-btn-1') {
-          nativePlayerWrapper.style.display = 'none';
-          nativeVideoPlayer.pause();
-          nativeVideoPlayer.removeAttribute('src');
-          nativeVideoPlayer.load();
-          iframePlayerWrapper.style.display = 'block';
+          // Server 1 now plays OkJatt!
+          iframePlayerWrapper.style.display = 'none';
+          videoPlayerIframe.src = '';
+          nativePlayerWrapper.style.display = 'block';
           
-          if (currentImdbId) {
-            showPlayerToast('Loading Server 1...');
-            const fetchUrl = `${API_BASE_URL}/api/netmirror-stream?subjectid=${currentImdbId}&se=${currentMediaType === 'tv' ? currentSeason : 0}&ep=${currentMediaType === 'tv' ? currentEpisode : 0}&title=${encodeURIComponent(currentMovieData ? currentMovieData.title : '')}`;
-            fetch(fetchUrl)
-              .then(res => res.json())
-              .then(data => {
-                if (data.streamUrl) {
-                  iframePlayerWrapper.style.display = 'none';
-                  videoPlayerIframe.src = '';
-                  nativePlayerWrapper.style.display = 'block';
-                  nativeVideoPlayer.src = data.streamUrl.startsWith('/api/') ? API_BASE_URL + data.streamUrl : data.streamUrl;
-                  nativeVideoPlayer.load();
-                  nativeVideoPlayer.play().catch(e => console.log('Autoplay blocked:', e));
-                  startDirectStreamWatchdog();
-                } else if (data.iframeUrl) {
-                  nativePlayerWrapper.style.display = 'none';
-                  nativeVideoPlayer.removeAttribute('src');
-                  nativeVideoPlayer.load();
-                  iframePlayerWrapper.style.display = 'block';
-                  videoPlayerIframe.src = data.iframeUrl;
-                }
-              })
-              .catch(err => {
-                console.error('Server 1 premium load failed, falling back:', err);
-                iframePlayerWrapper.style.display = 'block';
-                let prefix = btn.dataset.srcPrefix;
-                if (currentMediaType === 'tv') {
-                  prefix = prefix.replace('/movie/', '/tv/');
-                  videoPlayerIframe.src = `${prefix}${currentImdbId}/${currentSeason}/${currentEpisode}`;
-                } else {
-                  videoPlayerIframe.src = `${prefix}${currentImdbId}`;
-                }
-              });
+          // Determine if it is a show episode or a movie
+          const isShow = currentMediaType === 'tv';
+          if (isShow && currentEpisodesList.length > 0) {
+            const activeEp = currentEpisodesList[currentPlayingEpisodeIndex !== -1 ? currentPlayingEpisodeIndex : 0];
+            if (activeEp) {
+              showPlayerToast(`Loading Server 1 Episode: ${activeEp.title}...`);
+              const epId = activeEp.url.split('?id=')[1] || btoa(activeEp.url);
+              const fetchUrl = `${API_BASE_URL}/api/episode-stream?id=${epId}`;
+              fetch(fetchUrl)
+                .then(res => res.json())
+                .then(data => {
+                  if (data.streamUrl) {
+                    nativeVideoPlayer.src = data.streamUrl.startsWith('/api/') ? API_BASE_URL + data.streamUrl : data.streamUrl;
+                    nativeVideoPlayer.load();
+                    nativeVideoPlayer.play().catch(e => console.log('Autoplay blocked:', e));
+                    startDirectStreamWatchdog();
+                  }
+                })
+                .catch(err => console.error('Failed to load Server 1 OkJatt episode stream:', err));
+            }
+          } else {
+            // Play Movie
+            if (currentDirectStreamUrl) {
+              showPlayerToast('Loading Server 1 Movie...');
+              nativeVideoPlayer.src = currentDirectStreamUrl;
+              nativeVideoPlayer.load();
+              nativeVideoPlayer.play().catch(e => console.log('Autoplay blocked:', e));
+              startDirectStreamWatchdog();
+            }
           }
         } else {
+          // Servers 2, 3, 4 (Iframe embeds)
           nativePlayerWrapper.style.display = 'none';
           nativeVideoPlayer.pause();
           nativeVideoPlayer.removeAttribute('src');
@@ -1271,12 +1283,20 @@ async function playEpisode(epUrl, epTitle) {
   const activeServerBtn = document.querySelector('#player-servers .server-btn.active');
   const serverId = activeServerBtn ? activeServerBtn.id : '';
 
-  if (serverId === 'server-btn-direct') {
+  if (serverId === 'server-btn-direct' || serverId === 'server-btn-1') {
     try {
       let fetchUrl = '';
-      if (epUrl.includes('/api/netmirror-stream')) {
-        fetchUrl = epUrl;
+      if (serverId === 'server-btn-direct') {
+        if (currentImdbId) {
+          fetchUrl = `${API_BASE_URL}/api/netmirror-stream?subjectid=${currentImdbId}&se=${season}&ep=${episode}&title=${encodeURIComponent(currentMovieData ? currentMovieData.title : '')}`;
+        } else if (epUrl.includes('/api/netmirror-stream')) {
+          fetchUrl = epUrl;
+        } else {
+          const epId = epUrl.split('?id=')[1] || btoa(epUrl);
+          fetchUrl = `${API_BASE_URL}/api/episode-stream?id=${epId}`;
+        }
       } else {
+        // server-btn-1 (OkJatt)
         const epId = epUrl.split('?id=')[1] || btoa(epUrl);
         fetchUrl = `${API_BASE_URL}/api/episode-stream?id=${epId}`;
       }
@@ -1329,7 +1349,7 @@ async function playEpisode(epUrl, epTitle) {
       console.error('Failed to load direct stream:', err);
       const extPlayerContainer = document.getElementById('external-player-container');
       if (extPlayerContainer) extPlayerContainer.style.display = 'none';
-      showPlayerToast('Direct stream offline. Try playing in VLC/MX Player or select Server 1.');
+      showPlayerToast('Stream offline. Try playing in VLC/MX Player or switch server.');
     }
   } else if (currentImdbId) {
     let prefix = activeServerBtn.dataset.srcPrefix;
