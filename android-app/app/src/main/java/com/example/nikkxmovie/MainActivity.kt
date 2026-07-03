@@ -36,7 +36,29 @@ class MainActivity : ComponentActivity() {
 
       webViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-          return false // Load page inside the WebView itself
+          if (url != null && (url.startsWith("intent:") || url.startsWith("intent://"))) {
+            try {
+              val intent = android.content.Intent.parseUri(url, android.content.Intent.URI_INTENT_SCHEME)
+              if (intent != null) {
+                try {
+                  view?.context?.startActivity(intent)
+                } catch (e: Exception) {
+                  // Fallback: Clear package to let user play in any available video player (VLC, MX, etc.)
+                  intent.setPackage(null)
+                  try {
+                    view?.context?.startActivity(intent)
+                  } catch (e2: Exception) {
+                    Toast.makeText(view?.context, "No video player found. Please install VLC or MX Player.", Toast.LENGTH_LONG).show()
+                  }
+                }
+                return true
+              }
+            } catch (e: Exception) {
+              Toast.makeText(view?.context, "Invalid play link", Toast.LENGTH_SHORT).show()
+              return true
+            }
+          }
+          return false
         }
       }
 

@@ -1,4 +1,8 @@
 require('dotenv').config();
+const dns = require('dns');
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder('ipv4first');
+}
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -7,7 +11,7 @@ const https = require('https');
 const path = require('path');
 const crypto = require('crypto');
 
-const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+const httpsAgent = undefined; // Avoid rejectUnauthorized: false to prevent Cloudflare blocks
 
 const app = express();
 app.use((req, res, next) => {
@@ -41,24 +45,48 @@ const cache = {
   CACHE_DURATION: 10 * 60 * 1000 // 10 minutes cache
 };
 
+// Helper function to perform HTTP GET with automatic retries for transient socket resets (ECONNRESET)
+async function axiosGetWithRetry(url, config = {}, retries = 3, delay = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await axios.get(url, { ...config, httpsAgent: config.httpsAgent || httpsAgent });
+    } catch (error) {
+      const isTransient = !error.response || (error.response.status >= 500) || error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT';
+      if (isTransient && i < retries - 1) {
+        console.warn(`[axiosGetWithRetry] Retrying due to ${error.code || error.message} (Attempt ${i + 1}/${retries}): ${url}`);
+        await new Promise(res => setTimeout(res, delay * Math.pow(2, i)));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 // Helper function to fetch page content with standard user-agent headers
 async function fetchHtml(url) {
   try {
+    // Automatically sanitize and encode URL (e.g. spaces to %20) to prevent TLS socket resets
+    let safeUrl = url;
+    try {
+      safeUrl = new URL(url).href;
+    } catch (e) {
+      safeUrl = url.replace(/ /g, '%20');
+    }
+
     let referer = TARGET_BASE_URL + '/';
     try {
-      const urlObj = new URL(url);
+      const urlObj = new URL(safeUrl);
       referer = `${urlObj.protocol}//${urlObj.hostname}/`;
     } catch(e) {}
 
-    const response = await axios.get(url, {
+    const response = await axiosGetWithRetry(safeUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
         'Referer': referer
       },
-      timeout: 25000,
-      httpsAgent: httpsAgent
+      timeout: 25000
     });
     return response.data;
   } catch (error) {
@@ -79,14 +107,60 @@ function resolveOkJattUrl(url) {
   return url;
 }
 
+// Helper to sanitize scraped links (forces cdn2.checkyourlinks.shop instead of linktosho.store)
+function sanitizeScrapedLink(url) {
+  if (!url) return '';
+  let cleanUrl = resolveOkJattUrl(url);
+  if (cleanUrl.includes('linktosho.store')) {
+    cleanUrl = cleanUrl.replace(/cdn\d*\.linktosho\.store/gi, 'cdn2.checkyourlinks.shop');
+  }
+  return cleanUrl;
+}
+
+// Helper to get clean and contextual download titles
+function getDownloadTitle($, el) {
+  let text = $(el).text().trim().replace(/\s+/g, ' ');
+  
+  const isGeneric = !text || text.length < 5 || text.toLowerCase().includes('click here') || text.toLowerCase().includes('download') || text.includes('[]');
+  
+  if (isGeneric) {
+    let current = $(el).parent();
+    let foundLabel = '';
+    
+    for (let i = 0; i < 4 && current.length > 0; i++) {
+      const curText = current.text().trim().replace(/\s+/g, ' ');
+      const match = curText.match(/\b(480p|720p|1080p|2160p|4k|hq|v2|uhd)\b/i);
+      if (match) {
+        foundLabel = match[0];
+        if (curText.length > 3 && curText.length < 60) {
+          text = curText;
+          break;
+        }
+      }
+      current = current.parent();
+    }
+    
+    if (foundLabel && (!text || text.includes('[]') || text.toLowerCase().includes('click here'))) {
+      const cleanText = text.replace(/Click Here To Download|\[\]/gi, '').trim() || 'Download';
+      text = `${cleanText} (${foundLabel})`;
+    }
+  }
+  
+  text = text.replace(/\s*\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length < 4) {
+    text = $(el).attr('title') || 'Download Link';
+  }
+  return text;
+}
+
 // Helper to clean movie titles before searching IMDb
 function cleanMovieTitle(title) {
   if (!title) return '';
   
   let cleaned = title;
 
-  // Replace target site names
-  cleaned = cleaned.replace(/okjatt\.bond\.com|okjatt\.bond|okjatthd\.bond|okjatt\.in|okjatt\.org|okjatt|vegamovie\.ss|vegamovies|nikkXmovie|netmirror\.global|netmirror/gi, ' ');
+  // Replace target site names and known domain/brand suffixes
+  cleaned = cleaned.replace(/okjatt\.bond\.com|okjatt\.bond|okjatthd\.bond|okjatt\.in|okjatt\.org|okjatt|vegamovie\.ss|vegamovies|vegamovie|nikkXmovie|netmirror\.global|netmirror|movies4u\.pn|movies4u/gi, ' ');
   
   // Extract year if present, to keep it in the search query for accuracy
   let year = '';
@@ -95,19 +169,42 @@ function cleanMovieTitle(title) {
     year = yearMatch[0];
   }
   
+  // Clean season/episode patterns first
   cleaned = cleaned
-    .replace(/\b(s\d+ep\d+|s\d+\s+ep\d+|season\s+\d+|seanon\s+\d+|seasons|season|episodes|episode|episode\s+\d+|ep\d+|series|all|full)\b/gi, ' ') // Remove season, series and episode details
-    .replace(/\(.*?\)/g, ' ') // Remove parentheses contents
-    .replace(/\[.*?\]/g, ' ') // Remove brackets contents
-    .replace(/\{.*?\}/g, ' ') // Remove braces contents
-    .replace(/\b(480p|720p|1080p|2160p|4k|hd|web-dl|webrip|hdtc|hdtv|camrip|telesync|tc|ts|rip)\b/gi, ' ')
-    .replace(/\b(hindi|english|tamil|telugu|malayalam|kannada|punjabi|odia|bangali|gujarati|marathi|korean|chinese|urdu|multi-audio|dual-audio|org|dubbed|hq|dub|dual|audio|esub|mkv|mp4|download|watch|online)\b/gi, ' ')
-    .replace(/\b(full movie|uncut|extended|directors cut|complete|bootstrap)\b/gi, ' ')
-    .replace(/\b(web series|webseries|tv show|tvshow|watch free)\b/gi, ' ')
-    .replace(/[\-|\|]/g, ' ') // Replace punctuation with space
-    .replace(/\s+/g, ' ') // Collapse spaces
-    .trim();
-    
+    .replace(/\b(s\d+\s*e\d+)\b/gi, ' ') // e.g. s01e01, s1e2
+    .replace(/\b(s\d+\s*ep\d+)\b/gi, ' ') // e.g. s01ep01, s1ep2
+    .replace(/\bs\d+\b/gi, ' ') // e.g. S01, S1, S2
+    .replace(/\be\d+\b/gi, ' ') // e.g. E01, E1, E12
+    .replace(/\bep\d+\b/gi, ' ') // e.g. ep01, ep1
+    .replace(/\b(season\s*\d+|seanon\s*\d+|seasons|season)\b/gi, ' ')
+    .replace(/\b(episode\s*\d+|episodes|episode)\b/gi, ' ')
+    .replace(/\b(part\s*\d+|pt\s*\d+|volume\s*\d+|vol\s*\d+)\b/gi, ' ');
+
+  // Remove brackets, parentheses and braces contents (often contains metadata like [Hindi-Eng], (2024), etc.)
+  cleaned = cleaned
+    .replace(/\(.*?\)/g, ' ')
+    .replace(/\[.*?\]/g, ' ')
+    .replace(/\{.*?\}/g, ' ');
+
+  // Clean media specifications, qualities, codecs
+  cleaned = cleaned
+    .replace(/\b(480p|720p|1080p|2160p|4k|hd|web-dl|webrip|hdtc|hdtv|camrip|telesync|tc|ts|rip|bluray|brrip|dvdrip|dvd|hevc|x265|x264|h265|h264|10bit|8bit|hdr|dd5\.1|aac|dts|ac3|atmos)\b/gi, ' ');
+
+  // Clean language identifiers (full and abbreviations)
+  cleaned = cleaned
+    .replace(/\b(hindi|english|tamil|telugu|malayalam|kannada|punjabi|odia|bangali|gujarati|marathi|korean|chinese|urdu|japanese|multi-audio|dual-audio|multi|dual|audio|dubbed|dub|subbed|sub|subs|esubs|esub|subtitles|subtitle|hin|eng|tam|tel|kan|mal|jap|kor|chi|fre|spa|ger|rus)\b/gi, ' ');
+
+  // Clean common phrases
+  cleaned = cleaned
+    .replace(/\b(full movie|uncut|extended|directors cut|complete|bootstrap|watch|online|download|free|series|show|web series|webseries|tv show|tvshow|org|original|direct|source|mirror)\b/gi, ' ');
+
+  // Clean punctuation and replace with space
+  cleaned = cleaned.replace(/[\-|\||\/|\\|:|\.|\+]/g, ' ');
+
+  // Collapse spaces and trim
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  
+  // Re-append the year at the end if we extracted one and it was cleaned out
   if (year && !cleaned.includes(year)) {
     cleaned += ' ' + year;
   }
@@ -115,25 +212,25 @@ function cleanMovieTitle(title) {
   return cleaned.replace(/\s+/g, ' ').trim();
 }
 
-// Helper to replace target site brandings with NIKK ❤️ POOJA
+// Helper to replace target site brandings with N ❤️ P
 function cleanTitleBranding(title) {
   if (!title) return '';
   return title
-    .replace(/okjatt\.bond\.com/gi, 'NIKK ❤️ POOJA')
-    .replace(/okjatt\.bond/gi, 'NIKK ❤️ POOJA')
-    .replace(/okjatthd\.bond/gi, 'NIKK ❤️ POOJA')
-    .replace(/okjatt\.in/gi, 'NIKK ❤️ POOJA')
-    .replace(/okjatt\.org/gi, 'NIKK ❤️ POOJA')
-    .replace(/okjatt/gi, 'NIKK ❤️ POOJA')
-    .replace(/vegamovie\.ss/gi, 'NIKK ❤️ POOJA')
-    .replace(/vegamovies/gi, 'NIKK ❤️ POOJA')
-    .replace(/vegamovie/gi, 'NIKK ❤️ POOJA')
-    .replace(/netmirror\.global/gi, 'NIKK ❤️ POOJA')
-    .replace(/netmirror/gi, 'NIKK ❤️ POOJA')
-    .replace(/\[OkJatt\]/gi, '[NIKK ❤️ POOJA]')
-    .replace(/\(OkJatt\)/gi, '(NIKK ❤️ POOJA)')
-    .replace(/\[NetMirror\]/gi, '[NIKK ❤️ POOJA]')
-    .replace(/\(NetMirror\)/gi, '(NIKK ❤️ POOJA)')
+    .replace(/okjatt\.bond\.com/gi, 'N ❤️ P')
+    .replace(/okjatt\.bond/gi, 'N ❤️ P')
+    .replace(/okjatthd\.bond/gi, 'N ❤️ P')
+    .replace(/okjatt\.in/gi, 'N ❤️ P')
+    .replace(/okjatt\.org/gi, 'N ❤️ P')
+    .replace(/okjatt/gi, 'N ❤️ P')
+    .replace(/vegamovie\.ss/gi, 'N ❤️ P')
+    .replace(/vegamovies/gi, 'N ❤️ P')
+    .replace(/vegamovie/gi, 'N ❤️ P')
+    .replace(/netmirror\.global/gi, 'N ❤️ P')
+    .replace(/netmirror/gi, 'N ❤️ P')
+    .replace(/\[OkJatt\]/gi, '[N ❤️ P]')
+    .replace(/\(OkJatt\)/gi, '(N ❤️ P)')
+    .replace(/\[NetMirror\]/gi, '[N ❤️ P]')
+    .replace(/\(NetMirror\)/gi, '(N ❤️ P)')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -149,7 +246,7 @@ async function getImdbIdByTitle(title) {
     const queryChar = /^[a-z0-9]$/.test(firstChar) ? firstChar : 'a';
     
     const searchUrl = `https://sg.media-imdb.com/suggests/${queryChar}/${encodeURIComponent(cleanTitle.toLowerCase())}.json`;
-    const response = await axios.get(searchUrl, { timeout: 6000 });
+    const response = await axiosGetWithRetry(searchUrl, { timeout: 6000 });
     
     const dataText = response.data;
     const jsonStart = dataText.indexOf('(') + 1;
@@ -195,7 +292,7 @@ async function scrapeVegaCategory(category, page) {
     const html = await fetchHtml(url);
     const $ = cheerio.load(html);
     $('article, .post-item, .blog-post, .post').each((i, el) => {
-      const titleEl = $(el).find('h2 a, h3 a, a').first();
+      const titleEl = $(el).find('h3 a, h2 a').first();
       const href = titleEl.attr('href');
       const title = titleEl.text().trim() || $(el).find('img').attr('alt') || '';
       const imgEl = $(el).find('img').first();
@@ -219,10 +316,31 @@ async function scrapeVegaCategory(category, page) {
 
 // Helper to classify search items for categories
 function getCategoryOfItem(item) {
-  const titleLower = item.title.toLowerCase();
-  if (titleLower.includes('anime')) {
+  if (item.category === 'anime') {
     return 'anime';
   }
+  const titleLower = item.title.toLowerCase();
+  
+  let decodedUrl = '';
+  try {
+    decodedUrl = Buffer.from(item.detailId, 'base64').toString('utf8').toLowerCase();
+  } catch (e) {}
+
+  const isAnime = titleLower.includes('anime') || 
+                  titleLower.includes('animation') ||
+                  titleLower.includes('japanese') ||
+                  titleLower.includes('japan') ||
+                  titleLower.includes('donghua') ||
+                  titleLower.includes('subbed') ||
+                  item.cn === 'Japan' ||
+                  item.cn === 'japan' ||
+                  decodedUrl.includes('animation') ||
+                  decodedUrl.includes('anime');
+
+  if (isAnime) {
+    return 'anime';
+  }
+
   if (titleLower.includes('season') || 
       titleLower.includes('episode') || 
       titleLower.includes('ep-') ||
@@ -307,11 +425,22 @@ app.get('/api/movies', async (req, res) => {
                 poster = poster.replace('pbcdnw', 'pacdn');
               }
               
+              // Detect anime category from API response details
+              let itemCategory = '';
+              const isAnimeGenre = item.genre_ids && (
+                item.genre_ids.includes(10) || item.genre_ids.includes(6) || 
+                item.genre_ids.includes('10') || item.genre_ids.includes('6')
+              );
+              if (item.cn === 'Japan' || item.cn === 'japan' || isAnimeGenre) {
+                itemCategory = 'anime';
+              }
+
               list.push({
                 title: cleanTitleBranding(item.title),
                 detailId: Buffer.from(customUrl).toString('base64'),
                 poster: poster,
-                media_type: type
+                media_type: type,
+                category: itemCategory
               });
             });
           }
@@ -329,7 +458,7 @@ app.get('/api/movies', async (req, res) => {
           const $vega = cheerio.load(vegaHtml);
           const list = [];
           $vega('article, .post-item, .blog-post, .post').each((i, el) => {
-            const titleEl = $vega(el).find('h2 a, h3 a, a').first();
+            const titleEl = $vega(el).find('h3 a, h2 a').first();
             const href = titleEl.attr('href');
             const title = titleEl.text().trim() || $vega(el).find('img').attr('alt') || '';
             const imgEl = $vega(el).find('img').first();
@@ -337,10 +466,19 @@ app.get('/api/movies', async (req, res) => {
 
             if (href && title) {
               const absoluteDetailUrl = href.startsWith('http') ? href : new URL(href, 'https://vegamovie.ss').href;
+              
+              // Detect anime category from WordPress post class list
+              const classes = $vega(el).attr('class') || '';
+              let itemCategory = '';
+              if (classes.includes('category-animation') || classes.includes('category-anime')) {
+                itemCategory = 'anime';
+              }
+
               list.push({
                 title: cleanTitleBranding(title),
                 detailId: Buffer.from(absoluteDetailUrl).toString('base64'),
-                poster: poster ? (poster.startsWith('http') ? poster : new URL(poster, 'https://vegamovie.ss').href) : ''
+                poster: poster ? (poster.startsWith('http') ? poster : new URL(poster, 'https://vegamovie.ss').href) : '',
+                category: itemCategory
               });
             }
           });
@@ -375,7 +513,13 @@ app.get('/api/movies', async (req, res) => {
             return itemCat === 'movies';
           }
           if (searchCategory === 'anime') {
-            return itemCat === 'anime';
+            const isAnime = itemCat === 'anime';
+            if (!isAnime) return false;
+            const titleLower = item.title.toLowerCase();
+            return titleLower.includes('hindi') || 
+                   titleLower.includes('dual') || 
+                   titleLower.includes('multi') || 
+                   titleLower.includes('dub');
           }
           if (searchCategory === 'web-series' || searchCategory === 'tv-show') {
             return itemCat === 'web-series';
@@ -527,6 +671,17 @@ app.get('/api/movies', async (req, res) => {
       const vegaList = results[2].status === 'fulfilled' ? results[2].value : [];
 
       finalMoviesList = [...okjattList, ...netmirrorList, ...vegaList];
+
+      // Filter to only include Hindi dubbed anime when category is 'anime'
+      if (category === 'anime') {
+        finalMoviesList = finalMoviesList.filter(item => {
+          const titleLower = item.title.toLowerCase();
+          return titleLower.includes('hindi') || 
+                 titleLower.includes('dual') || 
+                 titleLower.includes('multi') || 
+                 titleLower.includes('dub');
+        });
+      }
     }
 
     // Check pagination next page state
@@ -571,10 +726,9 @@ app.get('/api/movie-details', async (req, res) => {
       const apiDetailUrl = `https://api2.imdb3.shop/api/${mediaType}/${id}`;
       console.log(`[Scraper] Fetching NetMirror details from API: ${apiDetailUrl}`);
       
-      const response = await axios.get(apiDetailUrl, {
+      const response = await axiosGetWithRetry(apiDetailUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0' },
-        timeout: 8000,
-        httpsAgent: httpsAgent
+        timeout: 8000
       });
       
       const item = response.data.results[0];
@@ -636,6 +790,14 @@ app.get('/api/movie-details', async (req, res) => {
         });
       }
       
+      // Resolve IMDb ID for NetMirror item
+      let imdbId = null;
+      try {
+        imdbId = await getImdbIdByTitle(title);
+      } catch (err) {
+        console.error('Error fetching IMDb ID for NetMirror:', err.message);
+      }
+
       const result = {
         title: cleanTitleBranding(title),
         infoHtml: cleanTitleBranding(infoHtml),
@@ -646,7 +808,7 @@ app.get('/api/movie-details', async (req, res) => {
           url: d.url,
           isEpisode: d.isEpisode
         })),
-        imdbId: null,
+        imdbId,
         streamUrl: downloads.length > 0 ? downloads[0].url : null
       };
       
@@ -716,24 +878,7 @@ app.get('/api/movie-details', async (req, res) => {
             const href = $(el).attr('href');
             if (!href) return;
             
-            let label = '';
-            let prev = $(el).closest('h3, div, p').prev();
-            while (prev.length > 0) {
-              const txt = prev.text().trim();
-              if (txt && (txt.includes('480p') || txt.includes('720p') || txt.includes('1080p') || txt.includes('Quality'))) {
-                label = txt;
-                break;
-              }
-              prev = prev.prev();
-            }
-            
-            if (!label) {
-              label = $(div).find('h3').first().text().trim() || 'Download Link';
-            }
-            
-            const linkText = $(el).text().trim() || 'Download';
-            const title = `${linkText} (${label})`;
-            
+            const title = getDownloadTitle($, el);
             const titleLower = title.toLowerCase();
             const isEp = titleLower.includes('episode') || titleLower.includes('ep-') || /\bep\b/i.test(titleLower) || titleLower.includes('ep ') || titleLower.includes('pack') || titleLower.includes('complete') || titleLower.includes('season') || titleLower.includes('s0') || titleLower.includes('s1') || titleLower.includes('s2') || titleLower.includes('s3') || titleLower.includes('s4') || titleLower.includes('s5');
             
@@ -748,16 +893,26 @@ app.get('/api/movie-details', async (req, res) => {
         
         // Fallback parser if downloads is empty
         if (downloads.length === 0) {
-          $('a').each((i, el) => {
+          $('.entry-content a, a').each((i, el) => {
             const href = $(el).attr('href');
-            let text = $(el).text().trim().replace(/\s+/g, ' ');
-            if (href && (href.includes('nexdrive') || href.includes('v-cloud') || href.includes('howtoblog') || href.includes('drive') || text.includes('Download'))) {
-              if (!text || text.length < 5 || text.includes('[]')) {
-                text = $(el).attr('title') || 'Download Link';
-              }
-              const titleLower = text.toLowerCase();
-              const isEp = titleLower.includes('episode') || titleLower.includes('ep-') || /\bep\b/i.test(titleLower) || titleLower.includes('ep ') || titleLower.includes('pack') || titleLower.includes('complete') || titleLower.includes('season') || titleLower.includes('s0') || titleLower.includes('s1') || titleLower.includes('s2') || titleLower.includes('s3') || titleLower.includes('s4') || titleLower.includes('s5');
-              const maskedUrl = `/api/download?id=${Buffer.from(href).toString('base64')}`;
+            if (!href) return;
+            
+            // Skip relative links and internal links
+            if (href.startsWith('/') || href.startsWith('#') || href.includes('vegamovie') || href.includes('vegamovies') || href.includes('javascript:')) return;
+            
+            // Skip common non-download external links
+            if (href.includes('telegram') || href.includes('t.me') || href.includes('facebook') || href.includes('twitter') || href.includes('instagram') || href.includes('youtube') || href.includes('google.com/search')) return;
+            
+            // Skip image files and web page resource assets
+            if (/\.(png|jpg|jpeg|gif|css|js|woff|ttf|svg)$/i.test(href)) return;
+            
+            let text = getDownloadTitle($, el);
+            const titleLower = text.toLowerCase();
+            const isEp = titleLower.includes('episode') || titleLower.includes('ep-') || /\bep\b/i.test(titleLower) || titleLower.includes('ep ') || titleLower.includes('pack') || titleLower.includes('complete') || titleLower.includes('season') || titleLower.includes('s0') || titleLower.includes('s1') || titleLower.includes('s2') || titleLower.includes('s3') || titleLower.includes('s4') || titleLower.includes('s5');
+            const maskedUrl = `/api/download?id=${Buffer.from(href).toString('base64')}`;
+            
+            // Avoid duplicate links
+            if (!downloads.some(d => d.url === maskedUrl)) {
               downloads.push({
                 title: text,
                 url: maskedUrl,
@@ -777,15 +932,25 @@ app.get('/api/movie-details', async (req, res) => {
 
         let streamUrl = null;
         if (downloads && downloads.length > 0) {
-          const validDwd = downloads.find(d => {
+          // 1. Try to find a direct .mp4 link
+          let validDwd = downloads.find(d => {
             try {
               const base64Id = d.url.split('?id=')[1];
               const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
-              return rawUrl && !rawUrl.includes('.html');
-            } catch(e) {
-              return false;
-            }
+              return rawUrl && rawUrl.includes('.mp4') && !rawUrl.includes('.html');
+            } catch(e) { return false; }
           });
+          
+          // 2. Fallback to any non-html link if no .mp4 link is present
+          if (!validDwd) {
+            validDwd = downloads.find(d => {
+              try {
+                const base64Id = d.url.split('?id=')[1];
+                const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
+                return rawUrl && !rawUrl.includes('.html');
+              } catch(e) { return false; }
+            });
+          }
           
           if (validDwd) {
             try {
@@ -892,129 +1057,186 @@ app.get('/api/movie-details', async (req, res) => {
 
     // Extract download links
     const downloads = [];
-    let downloadPageUrl = null;
+    
+    // Check if this page has multiple TV episode download pages
+    const episodeLinks = [];
     $('a').each((i, el) => {
       const href = $(el).attr('href');
-      if (href && (href.includes('/movies/download/') || href.includes('/download/'))) {
-        downloadPageUrl = new URL(href, detailUrl).href;
-        return false;
+      if (href) {
+        const isTvEpisode = href.includes('/tv/') && href.includes('-download-') && href.endsWith('.html');
+        if (isTvEpisode) {
+          const absHref = href.startsWith('http') ? href : new URL(href, detailUrl).href;
+          if (!episodeLinks.includes(absHref)) {
+            episodeLinks.push(absHref);
+          }
+        }
       }
     });
 
     let streamUrl = null;
 
-    if (downloadPageUrl) {
-      try {
-        const dwdHtml = await fetchHtml(downloadPageUrl);
-        const $dwd = cheerio.load(dwdHtml);
-        
-        // Find direct video player streamUrl from video source elements
-        $dwd('video source').each((i, el) => {
-          const src = $dwd(el).attr('src');
-          if (src && src.includes('.mp4')) {
-            streamUrl = src;
-            return false;
+    if (episodeLinks.length > 0) {
+      console.log(`[Scraper] Found ${episodeLinks.length} episodes on OkJatt page.`);
+      episodeLinks.forEach((epUrl, idx) => {
+        let epTitle = `Episode ${idx + 1}`;
+        try {
+          const urlObj = new URL(epUrl);
+          const pathname = decodeURIComponent(urlObj.pathname);
+          const filename = pathname.substring(pathname.lastIndexOf('/') + 1);
+          const cleanEpName = filename
+            .replace('-download', '')
+            .replace('.html', '')
+            .replace(/-/g, ' ');
+          
+          const matchEp = cleanEpName.match(/(?:S\d+Ep\d+|Episode\s*\d+.*)/i);
+          if (matchEp) {
+            epTitle = matchEp[0].trim();
+          } else {
+            epTitle = cleanEpName;
           }
+        } catch (e) {}
+
+        const maskedUrl = `/api/download?id=${Buffer.from(epUrl).toString('base64')}`;
+        downloads.push({
+          title: epTitle.charAt(0).toUpperCase() + epTitle.slice(1),
+          url: maskedUrl,
+          isEpisode: true
         });
-        
-        if (!streamUrl) {
-          $dwd('video').each((i, el) => {
+      });
+      if (downloads.length > 0) {
+        streamUrl = downloads[0].url;
+      }
+    } else {
+      // Normal single movie flow
+      let downloadPageUrl = null;
+      $('a').each((i, el) => {
+        const href = $(el).attr('href');
+        if (href && (href.includes('/movies/download/') || href.includes('/download/'))) {
+          downloadPageUrl = new URL(href, detailUrl).href;
+          return false;
+        }
+      });
+
+      if (downloadPageUrl) {
+        try {
+          const dwdHtml = await fetchHtml(downloadPageUrl);
+          const $dwd = cheerio.load(dwdHtml);
+          
+          $dwd('video source').each((i, el) => {
             const src = $dwd(el).attr('src');
             if (src && src.includes('.mp4')) {
               streamUrl = src;
               return false;
             }
           });
-        }
-        
-        if (!streamUrl) {
+          
+          if (!streamUrl) {
+            $dwd('video').each((i, el) => {
+              const src = $dwd(el).attr('src');
+              if (src && src.includes('.mp4')) {
+                streamUrl = src;
+                return false;
+              }
+            });
+          }
+          
+          if (!streamUrl) {
+            $dwd('a').each((i, el) => {
+              const href = $dwd(el).attr('href');
+              if (href && href.includes('.mp4')) {
+                streamUrl = href;
+                return false;
+              }
+            });
+          }
+
           $dwd('a').each((i, el) => {
-            const href = $dwd(el).attr('href');
+            let href = $dwd(el).attr('href');
+            if (href && !href.includes('.html') && (href.includes('checkyourlinks') || href.includes('cdn') || href.includes('.mp4') || href.includes('download') || href.includes('lnk-lnk'))) {
+              if (!href.startsWith('http')) {
+                href = new URL(href, downloadPageUrl).href;
+              }
+              
+              try {
+                const urlObj = new URL(href);
+                if (urlObj.hostname.includes('checkyourlinks') && (urlObj.pathname === '/' || urlObj.pathname === '' || urlObj.pathname === '/index.php')) {
+                  return;
+                }
+              } catch(e) {}
+
+              let text = getDownloadTitle($dwd, el);
+              const cleanHref = sanitizeScrapedLink(href);
+              const maskedUrl = `/api/download?id=${Buffer.from(cleanHref).toString('base64')}`;
+              downloads.push({
+                title: text,
+                url: maskedUrl,
+                isEpisode: false
+              });
+            }
+          });
+        } catch (err) {
+          console.error('Failed to fetch intermediate download page:', err.message);
+        }
+      }
+
+      if (downloads.length === 0) {
+        $('a').each((i, el) => {
+          let href = $(el).attr('href');
+          if (!href) return;
+          
+          const isDownloadPath = href.includes('/movies/download/') || href.includes('/download/');
+          const isTvEpisode = href.includes('/tv/') && href.includes('-download-') && href.endsWith('.html');
+          const isMatch = isDownloadPath || isTvEpisode || (!href.includes('.html') && (href.includes('checkyourlinks') || href.includes('cdn') || href.includes('.mp4') || href.includes('download') || href.includes('lnk-lnk')));
+          
+          if (isMatch) {
+            if ((href.startsWith('/') || href.startsWith('#') || href.includes('javascript:')) && !isDownloadPath) return;
+            if (href.includes('telegram') || href.includes('t.me') || href.includes('facebook') || href.includes('twitter') || href.includes('instagram') || href.includes('youtube')) return;
+            if (/\.(png|jpg|jpeg|gif|css|js|woff|ttf|svg)$/i.test(href)) return;
+            
+            let text = getDownloadTitle($, el);
+            if (!text || text.length < 5) {
+              text = isTvEpisode ? 'Download Episode' : 'Download Movie';
+            }
+            if (!href.startsWith('http')) {
+              href = new URL(href, detailUrl).href;
+            }
+            try {
+              const urlObj = new URL(href);
+              if (urlObj.hostname.includes('checkyourlinks') && (urlObj.pathname === '/' || urlObj.pathname === '' || urlObj.pathname === '/index.php')) {
+                return;
+              }
+            } catch(e) {}
+            const cleanHref = sanitizeScrapedLink(href);
+            const maskedUrl = `/api/download?id=${Buffer.from(cleanHref).toString('base64')}`;
+            
+            if (!downloads.some(d => d.url === maskedUrl)) {
+              downloads.push({
+                title: text,
+                url: maskedUrl,
+                isEpisode: isTvEpisode
+              });
+            }
+          }
+        });
+      }
+
+      if (!streamUrl) {
+        $('video source').each((i, el) => {
+          const src = $(el).attr('src');
+          if (src && src.includes('.mp4')) {
+            streamUrl = src;
+            return false;
+          }
+        });
+        if (!streamUrl) {
+          $('a').each((i, el) => {
+            const href = $(el).attr('href');
             if (href && href.includes('.mp4')) {
               streamUrl = href;
               return false;
             }
           });
         }
-
-        $dwd('a').each((i, el) => {
-          let href = $dwd(el).attr('href');
-          if (href && !href.includes('.html') && (href.includes('checkyourlinks') || href.includes('cdn') || href.includes('.mp4') || href.includes('download') || href.includes('lnk-lnk'))) {
-            let text = $dwd(el).text().trim().replace(/\s+/g, ' ');
-            if (!text || text.length < 5) {
-              text = 'Download Movie';
-            }
-            if (!href.startsWith('http')) {
-              href = new URL(href, downloadPageUrl).href;
-            }
-            // Auto append index.php to query-only checkyourlinks URL to prevent FastCGI errors
-            try {
-              const urlObj = new URL(href);
-              if (urlObj.hostname.includes('checkyourlinks') && (urlObj.pathname === '/' || urlObj.pathname === '')) {
-                urlObj.pathname = '/index.php';
-                href = urlObj.href;
-              }
-            } catch(e) {}
-            const maskedUrl = `/api/download?id=${Buffer.from(href).toString('base64')}`;
-            downloads.push({
-              title: text,
-              url: maskedUrl,
-              isEpisode: false
-            });
-          }
-        });
-      } catch (err) {
-        console.error('Failed to fetch intermediate download page:', err.message);
-      }
-    }
-
-    // Fallback: search on the main details page
-    if (downloads.length === 0) {
-      $('a').each((i, el) => {
-        let href = $(el).attr('href');
-        const isTvEpisode = href && href.includes('/tv/') && href.includes('-download-') && href.endsWith('.html');
-        if (href && (isTvEpisode || (!href.includes('.html') && (href.includes('checkyourlinks') || href.includes('cdn') || href.includes('.mp4') || href.includes('download') || href.includes('lnk-lnk'))))) {
-          let text = $(el).text().trim().replace(/\s+/g, ' ');
-          if (!text || text.length < 5) {
-            text = isTvEpisode ? 'Download Episode' : 'Download Movie';
-          }
-          if (!href.startsWith('http')) {
-            href = new URL(href, detailUrl).href;
-          }
-          // Auto append index.php to query-only checkyourlinks URL to prevent FastCGI errors
-          try {
-            const urlObj = new URL(href);
-            if (urlObj.hostname.includes('checkyourlinks') && (urlObj.pathname === '/' || urlObj.pathname === '')) {
-              urlObj.pathname = '/index.php';
-              href = urlObj.href;
-            }
-          } catch(e) {}
-          const maskedUrl = `/api/download?id=${Buffer.from(href).toString('base64')}`;
-          downloads.push({
-            title: text,
-            url: maskedUrl,
-            isEpisode: isTvEpisode
-          });
-        }
-      });
-    }
-
-    if (!streamUrl) {
-      $('video source').each((i, el) => {
-        const src = $(el).attr('src');
-        if (src && src.includes('.mp4')) {
-          streamUrl = src;
-          return false;
-        }
-      });
-      if (!streamUrl) {
-        $('a').each((i, el) => {
-          const href = $(el).attr('href');
-          if (href && href.includes('.mp4')) {
-            streamUrl = href;
-            return false;
-          }
-        });
       }
     }
 
@@ -1027,19 +1249,32 @@ app.get('/api/movie-details', async (req, res) => {
     }
 
     // Mask direct streamUrl
+    if (streamUrl) {
+      streamUrl = sanitizeScrapedLink(streamUrl);
+    }
     let maskedStreamUrl = streamUrl ? `/api/stream-play?id=${Buffer.from(streamUrl).toString('base64')}` : null;
     
     // Fallback: if direct streamUrl is not found, extract from first available download link
     if (!maskedStreamUrl && downloads && downloads.length > 0) {
-      const validDwd = downloads.find(d => {
+      // 1. Try to find a direct .mp4 link
+      let validDwd = downloads.find(d => {
         try {
           const base64Id = d.url.split('?id=')[1];
           const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
-          return rawUrl && !rawUrl.includes('.html');
-        } catch(e) {
-          return false;
-        }
+          return rawUrl && rawUrl.includes('.mp4') && !rawUrl.includes('.html');
+        } catch(e) { return false; }
       });
+      
+      // 2. Fallback to any non-html link if no .mp4 link is present
+      if (!validDwd) {
+        validDwd = downloads.find(d => {
+          try {
+            const base64Id = d.url.split('?id=')[1];
+            const rawUrl = Buffer.from(base64Id, 'base64').toString('utf8');
+            return rawUrl && !rawUrl.includes('.html');
+          } catch(e) { return false; }
+        });
+      }
       
       if (validDwd) {
         try {
@@ -1093,34 +1328,32 @@ app.get('/api/episode-stream', async (req, res) => {
     const html = await fetchHtml(episodeUrl);
     const $ = cheerio.load(html);
 
-    let streamUrl = null;
+    const matches = [];
     $('video source').each((i, el) => {
       const src = $(el).attr('src');
       if (src && src.includes('.mp4')) {
-        streamUrl = src;
-        return false;
+        matches.push(src.startsWith('http') ? src : new URL(src, episodeUrl).href);
+      }
+    });
+    $('video').each((i, el) => {
+      const src = $(el).attr('src');
+      if (src && src.includes('.mp4')) {
+        matches.push(src.startsWith('http') ? src : new URL(src, episodeUrl).href);
+      }
+    });
+    $('a').each((i, el) => {
+      const href = $(el).attr('href');
+      if (href && !href.includes('.html') && (href.includes('checkyourlinks') || href.includes('cdn') || href.includes('netmirror') || href.includes('.mp4') || href.includes('download') || href.includes('lnk-lnk'))) {
+        matches.push(href.startsWith('http') ? href : new URL(href, episodeUrl).href);
       }
     });
 
-    if (!streamUrl) {
-      $('video').each((i, el) => {
-        const src = $(el).attr('src');
-        if (src && src.includes('.mp4')) {
-          streamUrl = src;
-          return false;
-        }
-      });
-    }
-
-    if (!streamUrl) {
-      $('a').each((i, el) => {
-        const href = $(el).attr('href');
-        if (href && !href.includes('.html') && (href.includes('checkyourlinks') || href.includes('cdn') || href.includes('.mp4') || href.includes('download') || href.includes('lnk-lnk'))) {
-          streamUrl = href;
-          return false;
-        }
-      });
-    }
+    const uniqueMatches = [...new Set(matches.map(m => sanitizeScrapedLink(m)))];
+    let streamUrl = uniqueMatches.find(m => m.includes('checkyourlinks') && m.includes('.mp4') && !m.includes('?id=')) ||
+                    uniqueMatches.find(m => m.includes('checkyourlinks') && !m.includes('?id=')) ||
+                    uniqueMatches.find(m => m.includes('.mp4') && !m.includes('?id=')) ||
+                    uniqueMatches.find(m => m.includes('checkyourlinks')) ||
+                    uniqueMatches[0] || null;
 
     if (streamUrl) {
       // Auto append index.php to query-only checkyourlinks URL to prevent FastCGI errors
@@ -1159,8 +1392,8 @@ app.get('/api/download', async (req, res) => {
       originalUrl = new URL(originalUrl, TARGET_BASE_URL).href;
     }
 
-    // Force HTTPS for checkyourlinks.shop as port 80/HTTP times out/fails due to Cloudflare block
-    if (originalUrl.startsWith('http://') && (originalUrl.includes('checkyourlinks') || originalUrl.includes('cdn') || originalUrl.includes('netmirror'))) {
+    // Force HTTPS for netmirror/cdn (but NOT checkyourlinks, which times out on HTTPS port 443)
+    if (originalUrl.startsWith('http://') && !originalUrl.includes('checkyourlinks') && (originalUrl.includes('cdn') || originalUrl.includes('netmirror'))) {
       originalUrl = originalUrl.replace('http://', 'https://');
     }
 
@@ -1179,17 +1412,34 @@ app.get('/api/download', async (req, res) => {
         try {
           const html = await fetchHtml(originalUrl);
           const $dwd = cheerio.load(html);
-          let directUrl = null;
+          const matches = [];
+          $dwd('video source').each((i, el) => {
+            const src = $dwd(el).attr('src');
+            if (src && src.includes('.mp4')) {
+              matches.push(src.startsWith('http') ? src : new URL(src, originalUrl).href);
+            }
+          });
+          $dwd('video').each((i, el) => {
+            const src = $dwd(el).attr('src');
+            if (src && src.includes('.mp4')) {
+              matches.push(src.startsWith('http') ? src : new URL(src, originalUrl).href);
+            }
+          });
           $dwd('a').each((i, el) => {
             let href = $dwd(el).attr('href');
             if (href && !href.includes('.html') && (href.includes('checkyourlinks') || href.includes('cdn') || href.includes('netmirror') || href.includes('.mp4') || href.includes('download') || href.includes('lnk-lnk'))) {
-              directUrl = href.startsWith('http') ? href : new URL(href, originalUrl).href;
-              return false; // break loop
+              matches.push(href.startsWith('http') ? href : new URL(href, originalUrl).href);
             }
           });
+          const uniqueMatches = [...new Set(matches.map(m => sanitizeScrapedLink(m)))];
+          let directUrl = uniqueMatches.find(m => m.includes('checkyourlinks') && m.includes('.mp4') && !m.includes('?id=')) ||
+                          uniqueMatches.find(m => m.includes('checkyourlinks') && !m.includes('?id=')) ||
+                          uniqueMatches.find(m => m.includes('.mp4') && !m.includes('?id=')) ||
+                          uniqueMatches.find(m => m.includes('checkyourlinks')) ||
+                          uniqueMatches[0] || null;
           
           if (directUrl) {
-            if (directUrl.startsWith('http://') && (directUrl.includes('checkyourlinks') || directUrl.includes('cdn') || directUrl.includes('netmirror'))) {
+            if (directUrl.startsWith('http://') && !directUrl.includes('checkyourlinks') && (directUrl.includes('cdn') || directUrl.includes('netmirror'))) {
               directUrl = directUrl.replace('http://', 'https://');
             }
             return res.redirect(`/api/download?id=${Buffer.from(directUrl).toString('base64')}`);
@@ -1217,10 +1467,15 @@ app.get('/api/download', async (req, res) => {
 
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-      let refererHost = 'netmirror.global';
+      let refererUrl = 'https://netmirror.global/';
       try {
         const urlObj = new URL(originalUrl);
-        refererHost = urlObj.searchParams.get('d') || refererHost;
+        if (urlObj.hostname.includes('watch22') || urlObj.hostname.includes('hakunaymatata')) {
+          refererUrl = 'https://speed.watch22.shop/';
+        } else {
+          const refererHost = urlObj.searchParams.get('d') || urlObj.hostname;
+          refererUrl = `https://${refererHost}/`;
+        }
       } catch (e) {}
 
       const response = await axios({
@@ -1229,7 +1484,7 @@ app.get('/api/download', async (req, res) => {
         responseType: 'stream',
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-          'Referer': `https://${refererHost}/`
+          'Referer': refererUrl
         },
         httpsAgent: httpsAgent
       });
@@ -1275,6 +1530,75 @@ app.get('/api/stream-play', async (req, res) => {
       originalUrl = new URL(originalUrl, TARGET_BASE_URL).href;
     }
 
+    // Force HTTPS for netmirror/cdn (but NOT checkyourlinks, which times out on HTTPS port 443)
+    if (originalUrl.startsWith('http://') && !originalUrl.includes('checkyourlinks') && (originalUrl.includes('cdn') || originalUrl.includes('netmirror'))) {
+      originalUrl = originalUrl.replace('http://', 'https://');
+    }
+
+    // Append index.php for checkyourlinks root queries to prevent FastCGI errors
+    try {
+      const urlObj = new URL(originalUrl);
+      if (urlObj.hostname.includes('checkyourlinks') && (urlObj.pathname === '/' || urlObj.pathname === '')) {
+        urlObj.pathname = '/index.php';
+        originalUrl = urlObj.href;
+      }
+    } catch(e) {}
+
+    // If it's a web page, scrape it for the direct stream link
+    if (originalUrl.includes('.html')) {
+      try {
+        console.log(`[Proxy Stream] Resolving nested HTML download page: ${originalUrl}`);
+        const html = await fetchHtml(originalUrl);
+        const $dwd = cheerio.load(html);
+        const matches = [];
+        $dwd('video source').each((i, el) => {
+          const src = $dwd(el).attr('src');
+          if (src && src.includes('.mp4')) {
+            matches.push(src.startsWith('http') ? src : new URL(src, originalUrl).href);
+          }
+        });
+        $dwd('video').each((i, el) => {
+          const src = $dwd(el).attr('src');
+          if (src && src.includes('.mp4')) {
+            matches.push(src.startsWith('http') ? src : new URL(src, originalUrl).href);
+          }
+        });
+        $dwd('a').each((i, el) => {
+          const href = $dwd(el).attr('href');
+          if (href && !href.includes('.html') && (href.includes('checkyourlinks') || href.includes('cdn') || href.includes('netmirror') || href.includes('.mp4') || href.includes('download') || href.includes('lnk-lnk'))) {
+            matches.push(href.startsWith('http') ? href : new URL(href, originalUrl).href);
+          }
+        });
+        const uniqueMatches = [...new Set(matches.map(m => sanitizeScrapedLink(m)))];
+        let directUrl = uniqueMatches.find(m => m.includes('checkyourlinks') && m.includes('.mp4') && !m.includes('?id=')) ||
+                        uniqueMatches.find(m => m.includes('checkyourlinks') && !m.includes('?id=')) ||
+                        uniqueMatches.find(m => m.includes('.mp4') && !m.includes('?id=')) ||
+                        uniqueMatches.find(m => m.includes('checkyourlinks')) ||
+                        uniqueMatches[0] || null;
+        
+        if (directUrl) {
+          if (directUrl.startsWith('http://') && !directUrl.includes('checkyourlinks') && (directUrl.includes('cdn') || directUrl.includes('netmirror'))) {
+            directUrl = directUrl.replace('http://', 'https://');
+          }
+          
+          try {
+            const urlObj = new URL(directUrl);
+            if (urlObj.hostname.includes('checkyourlinks') && (urlObj.pathname === '/' || urlObj.pathname === '')) {
+              urlObj.pathname = '/index.php';
+              directUrl = urlObj.href;
+            }
+          } catch(e) {}
+          
+          console.log(`[Proxy Stream] Resolved direct URL from HTML: ${directUrl}`);
+          originalUrl = directUrl;
+        } else {
+          console.error('[Proxy Stream] No direct stream URL parsed from HTML page.');
+        }
+      } catch (err) {
+        console.error('[Proxy Stream] Failed to resolve nested HTML stream:', err.message);
+      }
+    }
+
     console.log(`[Proxy Stream] Streaming from CDN: ${originalUrl}`);
 
     const range = req.headers.range;
@@ -1285,24 +1609,71 @@ app.get('/api/stream-play', async (req, res) => {
     // Extract hostname for referrer to prevent hotlinking blocks
     try {
       const urlObj = new URL(originalUrl);
-      const refererHost = urlObj.searchParams.get('d') || urlObj.hostname;
-      requestHeaders['Referer'] = `https://${refererHost}/`;
+      if (urlObj.hostname.includes('watch22') || urlObj.hostname.includes('hakunaymatata')) {
+        requestHeaders['Referer'] = 'https://speed.watch22.shop/';
+      } else {
+        const refererHost = urlObj.searchParams.get('d') || urlObj.hostname;
+        requestHeaders['Referer'] = `https://${refererHost}/`;
+      }
     } catch (e) {
-      requestHeaders['Referer'] = 'https://netmirror.global/';
+      requestHeaders['Referer'] = 'https://speed.watch22.shop/';
     }
 
     if (range) {
       requestHeaders['Range'] = range;
     }
 
-    const response = await axios({
-      method: 'get',
-      url: originalUrl,
-      responseType: 'stream',
-      headers: requestHeaders,
-      timeout: 30000,
-      httpsAgent: httpsAgent
-    });
+    let response;
+    try {
+      response = await axios({
+        method: 'get',
+        url: originalUrl,
+        responseType: 'stream',
+        headers: requestHeaders,
+        timeout: 30000,
+        httpsAgent: httpsAgent
+      });
+    } catch (err) {
+      const refresh = req.query.refresh;
+      if (err.response && err.response.status === 403 && refresh) {
+        console.log('[Proxy Stream] Signature expired (403). Refreshing NetMirror URL...');
+        try {
+          const refreshParams = Buffer.from(refresh, 'base64').toString('utf8');
+          const refreshUrl = `http://localhost:3000/api/netmirror-stream?${refreshParams}`;
+          const refreshRes = await axios.get(refreshUrl, { timeout: 8000 });
+          if (refreshRes.data && refreshRes.data.streamUrl) {
+            const newMaskedId = new URL(refreshRes.data.streamUrl, 'http://localhost:3000').searchParams.get('id');
+            const freshUrl = Buffer.from(newMaskedId, 'base64').toString('utf8');
+            console.log(`[Proxy Stream] Successfully refreshed URL: ${freshUrl}`);
+            
+            const freshUrlObj = new URL(freshUrl);
+            const freshSign = freshUrlObj.searchParams.get('sign');
+            const freshT = freshUrlObj.searchParams.get('t');
+            
+            const origUrlObj = new URL(originalUrl);
+            origUrlObj.searchParams.set('sign', freshSign);
+            origUrlObj.searchParams.set('t', freshT);
+            originalUrl = origUrlObj.href;
+            
+            response = await axios({
+              method: 'get',
+              url: originalUrl,
+              responseType: 'stream',
+              headers: requestHeaders,
+              timeout: 30000,
+              httpsAgent: httpsAgent
+            });
+          } else {
+            throw new Error('Refresh response missing streamUrl');
+          }
+        } catch (refreshErr) {
+          console.error('[Proxy Stream] Failed to refresh stream link:', refreshErr.message);
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
 
     // Set appropriate status
     res.status(response.status);
@@ -1371,6 +1742,51 @@ app.get('/api/netmirror-stream', async (req, res) => {
     
     let playUrl = `https://speed.watch22.shop/play/watchbox.php?id=${subjectid}&se=${se || 0}&ep=${ep || 0}&dp=${encodeURIComponent(dp || '')}&na=${na}`;
     playUrl += `&ts=${timestamp}&sig=${signature}&exten=false`;
+    
+    // Attempt to scrape direct mp4 video stream URLs from the player page
+    try {
+      // NetMirror API hit is required first to initialize session
+      const apiDetailUrl = `https://api2.imdb3.shop/api/${se && se !== '0' ? 'tv' : 'movie'}/${subjectid}`;
+      await axiosGetWithRetry(apiDetailUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        timeout: 4000
+      }).catch(() => {});
+
+      const response = await axiosGetWithRetry(playUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Referer': 'https://netmirror.global/'
+        },
+        timeout: 8000
+      });
+      
+      const html = response.data;
+      console.log(`[Scraper] Fetched watchbox HTML length: ${html.length}. Content snippet: ${html.substring(0, 100).trim().replace(/\s+/g, ' ')}`);
+      
+      const mp4Links = [];
+      const regex = /myFunction(?:_dl)?\('([^']+)'/gi;
+      let match;
+      while ((match = regex.exec(html)) !== null) {
+        const link = match[1];
+        if (link && link.startsWith('http') && !mp4Links.includes(link)) {
+          mp4Links.push(link);
+        }
+      }
+      
+      console.log(`[Scraper] Parsed direct MP4 links count: ${mp4Links.length}`);
+      if (mp4Links.length > 0) {
+        // Choose the highest quality stream and ensure it uses the whitelisted bcdn.watch22.shop streaming domain
+        const targetMp4 = mp4Links[0].replace('bcdnxw.hakunaymatata.com', 'bcdn.watch22.shop');
+        
+        // Append refresh metadata parameter to allow auto-resigning when range requests hit 403 (signature expiry)
+        const refreshParams = `subjectid=${subjectid}&se=${se || 0}&ep=${ep || 0}&dp=${encodeURIComponent(dp || '')}&title=${encodeURIComponent(title || '')}`;
+        const maskedStreamUrl = `/api/stream-play?id=${Buffer.from(targetMp4).toString('base64')}&refresh=${Buffer.from(refreshParams).toString('base64')}`;
+        
+        return res.json({ streamUrl: maskedStreamUrl });
+      }
+    } catch (scrapeErr) {
+      console.error("Failed to parse direct MP4 links from NetMirror player, falling back to iframe:", scrapeErr.message);
+    }
     
     return res.json({ iframeUrl: playUrl });
   } catch (err) {
