@@ -782,7 +782,11 @@ async function openDetailsModal(detailId, posterUrl) {
       const btns = document.querySelectorAll('#player-servers .server-btn');
       btns.forEach(btn => btn.classList.remove('active'));
       
-      if (movie.streamUrl && streamOnline) {
+      if (currentEpisodesList.length > 0) {
+        // Default to Direct Stream (Premium) and auto-play the first episode
+        directServerBtn.classList.add('active');
+        playEpisode(currentEpisodesList[0].url, currentEpisodesList[0].title);
+      } else if (movie.streamUrl && streamOnline) {
         // Direct stream default (user preference)
         directServerBtn.classList.add('active');
         if (movie.streamUrl.includes('/api/netmirror-stream')) {
@@ -818,10 +822,6 @@ async function openDetailsModal(detailId, posterUrl) {
           }
           startDirectStreamWatchdog();
         }
-      } else if (currentEpisodesList.length > 0) {
-        // Default to Direct Stream (Premium) and auto-play the first episode
-        directServerBtn.classList.add('active');
-        playEpisode(currentEpisodesList[0].url, currentEpisodesList[0].title);
       } else if (currentImdbId) {
         // Fallback to first available iframe server
         const firstIframeBtn = document.querySelector('.server-btn[data-src-prefix]');

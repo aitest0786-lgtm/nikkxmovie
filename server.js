@@ -1063,7 +1063,14 @@ app.get('/api/movie-details', async (req, res) => {
     $('a').each((i, el) => {
       const href = $(el).attr('href');
       if (href) {
-        const isTvEpisode = href.includes('/tv/') && href.includes('-download-') && href.endsWith('.html');
+        const isTvEpisode = (href.includes('/tv/') || href.includes('/series/') || href.includes('/web-series/') || href.includes('/show/')) && 
+                            href.endsWith('.html') && 
+                            !href.includes('-full.html') && 
+                            !href.includes('-complete.html') &&
+                            !href.includes('-tv-shows') &&
+                            !href.includes('-web-series') &&
+                            !href.includes('/category/') &&
+                            !href.includes('index.html');
         if (isTvEpisode) {
           const absHref = href.startsWith('http') ? href : new URL(href, detailUrl).href;
           if (!episodeLinks.includes(absHref)) {
@@ -1185,7 +1192,14 @@ app.get('/api/movie-details', async (req, res) => {
           if (!href) return;
           
           const isDownloadPath = href.includes('/movies/download/') || href.includes('/download/');
-          const isTvEpisode = href.includes('/tv/') && href.includes('-download-') && href.endsWith('.html');
+          const isTvEpisode = (href.includes('/tv/') || href.includes('/series/') || href.includes('/web-series/') || href.includes('/show/')) && 
+                              href.endsWith('.html') && 
+                              !href.includes('-full.html') && 
+                              !href.includes('-complete.html') &&
+                              !href.includes('-tv-shows') &&
+                              !href.includes('-web-series') &&
+                              !href.includes('/category/') &&
+                              !href.includes('index.html');
           const isMatch = isDownloadPath || isTvEpisode || (!href.includes('.html') && (href.includes('checkyourlinks') || href.includes('cdn') || href.includes('.mp4') || href.includes('download') || href.includes('lnk-lnk')));
           
           if (isMatch) {
