@@ -272,23 +272,67 @@ function setupEventListeners() {
         }
       } else {
         clearDirectStreamWatchdog();
-        nativePlayerWrapper.style.display = 'none';
-        nativeVideoPlayer.pause();
-        nativeVideoPlayer.removeAttribute('src');
-        nativeVideoPlayer.load();
-        iframePlayerWrapper.style.display = 'block';
+        
+        if (btn.id === 'server-btn-1') {
+          nativePlayerWrapper.style.display = 'none';
+          nativeVideoPlayer.pause();
+          nativeVideoPlayer.removeAttribute('src');
+          nativeVideoPlayer.load();
+          iframePlayerWrapper.style.display = 'block';
+          
+          if (currentImdbId) {
+            showPlayerToast('Loading Server 1...');
+            const fetchUrl = `${API_BASE_URL}/api/netmirror-stream?subjectid=${currentImdbId}&se=${currentMediaType === 'tv' ? currentSeason : 0}&ep=${currentMediaType === 'tv' ? currentEpisode : 0}&title=${encodeURIComponent(currentMovieData ? currentMovieData.title : '')}`;
+            fetch(fetchUrl)
+              .then(res => res.json())
+              .then(data => {
+                if (data.streamUrl) {
+                  iframePlayerWrapper.style.display = 'none';
+                  videoPlayerIframe.src = '';
+                  nativePlayerWrapper.style.display = 'block';
+                  nativeVideoPlayer.src = data.streamUrl.startsWith('/api/') ? API_BASE_URL + data.streamUrl : data.streamUrl;
+                  nativeVideoPlayer.load();
+                  nativeVideoPlayer.play().catch(e => console.log('Autoplay blocked:', e));
+                  startDirectStreamWatchdog();
+                } else if (data.iframeUrl) {
+                  nativePlayerWrapper.style.display = 'none';
+                  nativeVideoPlayer.removeAttribute('src');
+                  nativeVideoPlayer.load();
+                  iframePlayerWrapper.style.display = 'block';
+                  videoPlayerIframe.src = data.iframeUrl;
+                }
+              })
+              .catch(err => {
+                console.error('Server 1 premium load failed, falling back:', err);
+                iframePlayerWrapper.style.display = 'block';
+                let prefix = btn.dataset.srcPrefix;
+                if (currentMediaType === 'tv') {
+                  prefix = prefix.replace('/movie/', '/tv/');
+                  videoPlayerIframe.src = `${prefix}${currentImdbId}/${currentSeason}/${currentEpisode}`;
+                } else {
+                  videoPlayerIframe.src = `${prefix}${currentImdbId}`;
+                }
+              });
+          }
+        } else {
+          nativePlayerWrapper.style.display = 'none';
+          nativeVideoPlayer.pause();
+          nativeVideoPlayer.removeAttribute('src');
+          nativeVideoPlayer.load();
+          iframePlayerWrapper.style.display = 'block';
 
-        if (currentImdbId) {
-          let prefix = btn.dataset.srcPrefix;
-          if (currentMediaType === 'tv') {
-            if (prefix.includes('multiembed.mov')) {
-              videoPlayerIframe.src = `${prefix}${currentImdbId}&s=${currentSeason}&e=${currentEpisode}`;
+          if (currentImdbId) {
+            let prefix = btn.dataset.srcPrefix;
+            if (currentMediaType === 'tv') {
+              if (prefix.includes('multiembed.mov')) {
+                videoPlayerIframe.src = `${prefix}${currentImdbId}&s=${currentSeason}&e=${currentEpisode}`;
+              } else {
+                prefix = prefix.replace('/movie/', '/tv/');
+                videoPlayerIframe.src = `${prefix}${currentImdbId}/${currentSeason}/${currentEpisode}`;
+              }
             } else {
-              prefix = prefix.replace('/movie/', '/tv/');
-              videoPlayerIframe.src = `${prefix}${currentImdbId}/${currentSeason}/${currentEpisode}`;
+              videoPlayerIframe.src = `${prefix}${currentImdbId}`;
             }
-          } else {
-            videoPlayerIframe.src = `${prefix}${currentImdbId}`;
           }
         }
       }
