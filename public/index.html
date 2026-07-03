@@ -157,6 +157,12 @@
               <div class="player-box" id="player-box-container" style="display: none;">
                 <h3><i class="fa-solid fa-circle-play"></i> Watch Online / Video Player</h3>
                 
+                <!-- Audio Language Selector -->
+                <div class="audio-selector" id="player-audio-container" style="display: none;">
+                  <span class="audio-selector-label"><i class="fa-solid fa-headphones"></i> Audio:</span>
+                  <div class="audio-options" id="player-audio-options"></div>
+                </div>
+
                 <!-- Native Video Player (For direct streaming) -->
                 <div class="player-wrapper-native" id="native-player-wrapper" style="display: none;">
                   <video id="native-video-player" controls playsinline webkit-playsinline preload="metadata">
@@ -210,12 +216,6 @@
                  <div class="quality-selector" id="player-quality-container" style="display: none;">
                    <span class="quality-selector-label"><i class="fa-solid fa-sliders"></i> Quality:</span>
                    <div class="quality-options" id="player-quality-options"></div>
-                 </div>
-
-                 <!-- Audio Language Selector -->
-                 <div class="audio-selector" id="player-audio-container" style="display: none;">
-                   <span class="audio-selector-label"><i class="fa-solid fa-language"></i> Audio Language:</span>
-                   <div class="audio-options" id="player-audio-options"></div>
                  </div>
 
                  <!-- Brightness Controller -->
